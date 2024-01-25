@@ -1,6 +1,7 @@
 {
   "name": "tsnc/prisma-php",
   "description": "Prisma-PHP: A Revolutionary Library Bridging PHP with Prisma ORM",
+  "version": "1.0.0",
   "license": "MIT",
   "autoload": {
     "psr-4": {
