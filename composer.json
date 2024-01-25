@@ -16,6 +16,7 @@
     }
   ],
   "require": {
+    "tsnc/prisma-php": "dev-master",
     "php": "^7.4|^8.0"
   }
 }
