@@ -1,0 +1,17 @@
+{
+  "name": "tsnc/prisma-php",
+  "description": "Prisma-PHP: A Revolutionary Library Bridging PHP with Prisma ORM",
+  "license": "MIT",
+  "autoload": {
+    "psr-4": {
+      "Tsnc\\PrismaPhp\\": "src/"
+    }
+  },
+  "authors": [
+    {
+      "name": "Jefferson",
+      "email": "thesteelninjacode@gmail.com"
+    }
+  ],
+  "require": {}
+}
