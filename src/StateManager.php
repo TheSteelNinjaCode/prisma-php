@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Lib;
+namespace PPHP;
 
-use Lib\Request;
+use PPHP\Request;
 
 class StateManager
 {

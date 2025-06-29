@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Lib\PHPX;
+namespace PPHP\PHPX;
 
-use Lib\PHPX\IPHPX;
-use Lib\PHPX\TwMerge;
-use Lib\PrismaPHPSettings;
+use PPHP\PHPX\IPHPX;
+use PPHP\PHPX\TwMerge;
+use PPHP\PrismaPHPSettings;
 use Exception;
 
 class PHPX implements IPHPX

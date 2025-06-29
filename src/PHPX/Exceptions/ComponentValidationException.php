@@ -1,6 +1,6 @@
 <?php
 
-namespace Lib\PHPX\Exceptions;
+namespace PPHP\PHPX\Exceptions;
 
 use RuntimeException;
 

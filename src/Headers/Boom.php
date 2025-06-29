@@ -2,15 +2,8 @@
 
 declare(strict_types=1);
 
-namespace Lib\Headers;
+namespace PPHP\Headers;
 
-/**
- * Class Boom
- *
- * A helper class for generating standardized HTTP error responses.
- *
- * @package Lib\Headers
- */
 class Boom
 {
     /**

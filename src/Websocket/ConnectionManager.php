@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Lib\Websocket;
+namespace PPHP\Websocket;
 
 use Ratchet\MessageComponentInterface;
 use Ratchet\ConnectionInterface;

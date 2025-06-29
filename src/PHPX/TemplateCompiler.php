@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Lib\PHPX;
+namespace PPHP\PHPX;
 
-use Lib\PrismaPHPSettings;
-use Lib\MainLayout;
+use PPHP\PrismaPHPSettings;
+use PPHP\MainLayout;
 use DOMDocument;
 use DOMElement;
 use DOMComment;
@@ -18,8 +18,8 @@ use ReflectionClass;
 use ReflectionProperty;
 use ReflectionType;
 use ReflectionNamedType;
-use Lib\PHPX\TypeCoercer;
-use Lib\PHPX\Exceptions\ComponentValidationException;
+use PPHP\PHPX\TypeCoercer;
+use PPHP\PHPX\Exceptions\ComponentValidationException;
 
 class TemplateCompiler
 {

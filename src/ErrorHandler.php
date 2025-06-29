@@ -1,11 +1,13 @@
 <?php
 
-namespace Lib;
+declare(strict_types=1);
+
+namespace PPHP;
 
 use Bootstrap;
-use Lib\MainLayout;
+use PPHP\MainLayout;
 use Throwable;
-use Lib\PHPX\Exceptions\ComponentValidationException;
+use PPHP\PHPX\Exceptions\ComponentValidationException;
 
 class ErrorHandler
 {

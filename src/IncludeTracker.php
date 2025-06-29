@@ -1,10 +1,12 @@
 <?php
 
-namespace Lib;
+declare(strict_types=1);
+
+namespace PPHP;
 
 use RuntimeException;
 use InvalidArgumentException;
-use Lib\PHPX\TemplateCompiler;
+use PPHP\PHPX\TemplateCompiler;
 
 class IncludeTracker
 {

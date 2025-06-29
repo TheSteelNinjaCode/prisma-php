@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Lib\PHPMailer;
+namespace PPHP\PHPMailer;
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
-use Lib\Validator;
+use PPHP\Validator;
 
 class Mailer
 {

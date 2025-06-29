@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Lib\Auth;
+namespace PPHP\Auth;
 
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use DateInterval;
 use DateTime;
-use Lib\Validator;
+use PPHP\Validator;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
-use Lib\Request;
+use PPHP\Request;
 use Exception;
 use InvalidArgumentException;
 use ArrayObject;

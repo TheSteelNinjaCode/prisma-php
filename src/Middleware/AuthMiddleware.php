@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Lib\Middleware;
+namespace PPHP\Middleware;
 
-use Lib\Auth\Auth;
-use Lib\Auth\AuthConfig;
-use Lib\Request;
+use PPHP\Auth\Auth;
+use PPHP\Auth\AuthConfig;
+use PPHP\Request;
 
 final class AuthMiddleware
 {

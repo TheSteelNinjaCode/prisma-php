@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Lib;
+namespace PPHP;
 
-use Lib\Headers\Boom;
+use PPHP\Headers\Boom;
 use ArrayObject;
 use stdClass;
-use Lib\PrismaPHPSettings;
+use PPHP\PrismaPHPSettings;
 
 class Request
 {

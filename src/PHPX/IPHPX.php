@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Lib\PHPX;
+namespace PPHP\PHPX;
 
 interface IPHPX
 {
