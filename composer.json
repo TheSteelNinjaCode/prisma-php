@@ -1,23 +1,25 @@
 {
   "name": "tsnc/prisma-php",
-  "description": "Prisma-PHP: A Revolutionary Library Bridging PHP with Prisma ORM",
+  "description": "Prisma PHP: The Next-Gen Framework Merging PHP’s Power with Prisma's ORM Mastery",
   "version": "1.0.0",
+  "type": "library",
   "license": "MIT",
   "autoload": {
     "psr-4": {
-      "Tsnc\\PrismaPhp\\": "src/"
+      "PPHP\\": "src/"
     }
   },
-  "minimum-stability": "dev",
+  "require": {
+    "php": "^8.2"
+  },
+  "minimum-stability": "stable",
+  "prefer-stable": true,
   "authors": [
     {
       "name": "Jefferson",
       "email": "thesteelninjacode@gmail.com"
     }
   ],
-  "require": {
-    "php": "^7.4|^8.0"
-  },
   "scripts": {
     "prisma-generate": "php src/index.php"
   }
