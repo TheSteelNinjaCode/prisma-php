@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace PPHP;
 
+/**
+ * @template T
+ */
 final class Set
 {
     /**
