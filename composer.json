@@ -1,7 +1,7 @@
 {
   "name": "tsnc/prisma-php",
   "description": "Prisma PHP: The Next-Gen Framework Merging PHP’s Power with Prisma's ORM Mastery",
-  "version": "1.0.2",
+  "version": "1.0.0",
   "type": "library",
   "license": "MIT",
   "autoload": {
