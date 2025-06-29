@@ -1,11 +1,2 @@
-# node_modules
-/node_modules/
-
 # composer vendor
 /vendor/
-
-# composer lock file
-/composer.lock
-
-# local env files
-/.env

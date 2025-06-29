@@ -1,3 +1,9 @@
 <?php
+require 'vendor/autoload.php';
 
-file_put_contents(__DIR__ . "/generated.php", "Hello World!");
+use PPHP\Set;
+
+$set = new Set();
+$set->add("Hello World");
+
+var_dump($set->values());
