@@ -209,11 +209,24 @@ class TemplateCompiler
                     return $m[0];
                 }
 
-                if (strpos($m[2], '<![CDATA[') !== false) {
+                if (str_contains($m[2], '<![CDATA[')) {
                     return $m[0];
                 }
 
-                if (preg_match('/\btype\s*=\s*(["\']?)(?!text\/|application\/javascript|module)/i', $m[1])) {
+                $type = '';
+                if (preg_match('/\btype\s*=\s*([\'"]?)([^\'"\s>]+)/i', $m[1], $t)) {
+                    $type = strtolower($t[2]);
+                }
+
+                $codeTypes = [
+                    '',
+                    'text/javascript',
+                    'application/javascript',
+                    'module',
+                    'text/php',
+                ];
+
+                if (!in_array($type, $codeTypes, true)) {
                     return $m[0];
                 }
 

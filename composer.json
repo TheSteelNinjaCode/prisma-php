@@ -19,8 +19,5 @@
       "name": "Jefferson",
       "email": "thesteelninjacode@gmail.com"
     }
-  ],
-  "scripts": {
-    "prisma-generate": "php src/index.php"
-  }
+  ]
 }

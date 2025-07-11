@@ -110,8 +110,8 @@ class MainLayout
                             $attrs = $m[1];
                             $encodedClass = 's' . base_convert(sprintf('%u', crc32($rawClassName)), 10, 36);
 
-                            if (!str_contains($attrs, 'pp-sync-script=')) {
-                                $attrs .= " pp-sync-script=\"{$encodedClass}\"";
+                            if (!str_contains($attrs, 'pp-component=')) {
+                                $attrs .= " pp-component=\"{$encodedClass}\"";
                             }
 
                             if (!preg_match('/\btype\s*=\s*(["\'])[^\1]*\1|\btype\s*=\s*\S+/i', $attrs)) {
