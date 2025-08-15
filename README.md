@@ -34,7 +34,6 @@ Create and use a set:
 
 ```php
 <?php
-require 'vendor/autoload.php';
 
 use PPHP\Set;
 
@@ -51,7 +50,6 @@ print_r($set->values());
 
 ```php
 <?php
-require 'vendor/autoload.php';
 
 use PPHP\Set;
 
