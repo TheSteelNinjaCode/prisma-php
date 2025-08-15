@@ -12,6 +12,9 @@ final class AuthMiddleware
 {
     public static function handle($requestPathname)
     {
+        $singInRoute = "/signin";
+        $deniedRoute = "/denied";
+
         if (AuthConfig::IS_ALL_ROUTES_PRIVATE) {
             $isLogin = Auth::getInstance()->isAuthenticated();
             $isApiAuthRoute = stripos($requestPathname, AuthConfig::API_AUTH_PREFIX) === 0;
@@ -42,7 +45,7 @@ final class AuthMiddleware
 
             // Redirect to the default home route if the user is already authenticated
             if (!$isLogin && !$isPublicRoute) {
-                Request::redirect("/signin");
+                Request::redirect($singInRoute);
             }
         } else {
             // Skip the middleware if the route is public
@@ -52,7 +55,7 @@ final class AuthMiddleware
 
             // Check if the user is authorized to access the route or redirect to login
             if (!self::isAuthorized()) {
-                Request::redirect('/signin');
+                Request::redirect($singInRoute);
             }
         }
 
@@ -65,7 +68,7 @@ final class AuthMiddleware
                 // echo "You are authorized to access this route";
             } elseif ($matchValue === "Role mismatch") {
                 // echo "You are not authorized to access this route";
-                Request::redirect('/denied');
+                Request::redirect($deniedRoute);
             } else {
                 // echo "Unexpected error encountered";
             }

@@ -245,10 +245,10 @@ class TypeCoercer
 
     private static function isArrayLike(string $value): bool
     {
-        return Validator::json($value) ||
-            str_contains($value, ',') ||
-            str_contains($value, '[') ||
-            str_contains($value, '{');
+        return Validator::json($value) === true
+            || str_contains($value, ',')
+            || str_contains($value, '[')
+            || str_contains($value, '{');
     }
 
     private static function getNormalizedType(mixed $value): string
@@ -328,7 +328,7 @@ class TypeCoercer
             return $value;
         }
         if (is_string($value)) {
-            if (Validator::json($value)) {
+            if (Validator::json($value) === true) {
                 $decoded = json_decode($value, true);
                 if (is_array($decoded)) {
                     return $decoded;

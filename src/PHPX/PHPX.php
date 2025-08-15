@@ -27,14 +27,130 @@ class PHPX implements IPHPX
     protected array $attributesArray = [];
 
     /**
+     * @var array|null Component hierarchy set during rendering
+     */
+    protected static ?array $currentHierarchy = null;
+
+    /**
+     * @var string|null Current component ID
+     */
+    protected static ?string $currentComponentId = null;
+
+    /**
      * Constructor to initialize the component with the given properties.
-     * 
+     *
      * @param array<string, mixed> $props Optional properties to customize the component.
      */
     public function __construct(array $props = [])
     {
         $this->props = $props;
         $this->children = $props['children'] ?? '';
+    }
+
+    /**
+     * Convert a property name to a JavaScript variable path.
+     *
+     * This method generates a JavaScript variable path for the given property name,
+     * based on the current component hierarchy. It is used to access properties in
+     * the JavaScript context of the component.
+     *
+     * @param string $name The property name to convert.
+     * @return string The JavaScript variable path for the property.
+     */
+    protected function propsAsVar(string $name): string
+    {
+        if (empty($name)) {
+            return '';
+        }
+
+        $hierarchy = $this->getComponentHierarchy();
+
+        if (count($hierarchy) > 1 && end($hierarchy) === self::$currentComponentId) {
+            array_pop($hierarchy);
+        }
+
+        return "pphp.props." . implode('.', $hierarchy) . ".{$name}";
+    }
+
+    /**
+     * Emit a client-side dispatch call.
+     *
+     * @param non-empty-string|null $name  Reactive key (e.g. "myVar", "voucher.total", or "app.s9ggniz.myVar").
+     * @param string                $value Raw JS inserted verbatim (variable, expression, or pre-JSON-encoded value).
+     * @param array{
+     *   scope?: 'current'|'parent'|'root'|string[]
+     * }                              $options Dispatch options (defaults to ['scope' => 'current']).
+     *
+     * @return string JavaScript snippet like: pphp.dispatchEvent("myVar", 123, {"scope":"current"});
+     */
+    protected function dispatchEvent(?string $name, string $value, array $options = []): string
+    {
+        $name = trim((string) $name);
+        if ($name === '') {
+            return '';
+        }
+
+        // normalize options
+        $opts = $options;
+        if (!array_key_exists('scope', $opts)) {
+            $opts['scope'] = 'current';
+        } else {
+            if (is_string($opts['scope'])) {
+                $allowed = ['current', 'parent', 'root'];
+                if (!in_array($opts['scope'], $allowed, true)) {
+                    $opts['scope'] = 'current';
+                }
+            } elseif (is_array($opts['scope'])) {
+                $opts['scope'] = array_values(array_map('strval', $opts['scope']));
+            } else {
+                $opts['scope'] = 'current';
+            }
+        }
+
+        // safely encode name/options; value is inserted verbatim
+        $jsName = json_encode($name, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $jsOpts = json_encode($opts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return "pphp.dispatchEvent({$jsName}, {$value}, {$jsOpts});";
+    }
+
+    /**
+     * Set the component hierarchy and current component ID (called by TemplateCompiler during rendering)
+     *
+     * @param array $hierarchy The component hierarchy
+     * @param string $currentId The current component ID
+     */
+    public static function setRenderingContext(array $hierarchy, string $currentId): void
+    {
+        self::$currentHierarchy = $hierarchy;
+        self::$currentComponentId = $currentId;
+    }
+
+    /**
+     * Get the parent component ID from the current hierarchy.
+     *
+     * @return string|null The parent component ID, or null if no parent exists
+     */
+    protected function getParentComponent(): ?string
+    {
+        $fullHierarchy = $this->getComponentHierarchy();
+
+        if (count($fullHierarchy) >= 2) {
+            return $fullHierarchy[count($fullHierarchy) - 2];
+        }
+
+        return null;
+    }
+
+    /**
+     * Get the full component hierarchy as an array.
+     * Useful for building complete hierarchy paths for JavaScript.
+     *
+     * @return array Array of component IDs from root to current
+     */
+    protected function getComponentHierarchy(): array
+    {
+        return self::$currentHierarchy ?? ['app'];
     }
 
     /**
@@ -68,7 +184,7 @@ class PHPX implements IPHPX
         unset($chunk);
 
         $merged = PrismaPHPSettings::$option->tailwindcss
-            ? TwMerge::mergeClasses(...$all)
+            ? TwMerge::merge(...$all)
             : $this->mergeClasses(...$all);
 
         return str_replace(array_keys($expr), array_values($expr), $merged);
@@ -118,9 +234,7 @@ class PHPX implements IPHPX
             array_flip(array_merge($reserved, $exclude))
         );
 
-        foreach ($params as $k => $v) {
-            $props[$k] = $v;
-        }
+        $props = array_merge($params, $props);
 
         $pairs = array_map(
             static fn($k, $v) => sprintf(

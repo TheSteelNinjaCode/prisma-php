@@ -193,8 +193,10 @@ class Request
     public static string $requestedWith = '';
 
     /**
-     * Initialize the request by setting all static properties.
+     * @var string $remoteAddr Holds the remote address of the request.
      */
+    public static string $remoteAddr = '';
+
     public static function init(): void
     {
         self::$params = new ArrayObject([], ArrayObject::ARRAY_AS_PROPS);
@@ -222,6 +224,7 @@ class Request
         self::$localStorage = self::getLocalStorage();
         self::$protocol = self::getProtocol();
         self::$documentUrl = self::$protocol . self::$domainName . self::$scriptName;
+        self::$remoteAddr = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
     }
 
     /**

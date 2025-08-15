@@ -20,6 +20,8 @@ class MainLayout
     private static ?Set $footerScripts = null;
     private static array $customMetadata = [];
 
+    private static array $processedScripts = [];
+
     public static function init(): void
     {
         if (self::$headScripts === null) {
@@ -28,6 +30,7 @@ class MainLayout
         if (self::$footerScripts === null) {
             self::$footerScripts = new Set();
         }
+        self::$processedScripts = [];
     }
 
     /**
@@ -55,11 +58,19 @@ class MainLayout
         $callerClass = $trace[1]['class'] ?? 'Unknown';
 
         foreach ($scripts as $script) {
+            $scriptKey = md5(trim($script));
+
             if (strpos($script, '<script') !== false) {
                 $taggedScript = "<!-- class:" . $callerClass . " -->\n" . $script;
-                self::$footerScripts->add($taggedScript);
+                if (!isset(self::$processedScripts[$scriptKey])) {
+                    self::$footerScripts->add($taggedScript);
+                    self::$processedScripts[$scriptKey] = true;
+                }
             } else {
-                self::$footerScripts->add($script);
+                if (!isset(self::$processedScripts[$scriptKey])) {
+                    self::$footerScripts->add($script);
+                    self::$processedScripts[$scriptKey] = true;
+                }
             }
         }
     }
@@ -97,6 +108,7 @@ class MainLayout
     public static function outputFooterScripts(): string
     {
         $processed = [];
+        $componentCounter = 0;
 
         foreach (self::$footerScripts->values() as $script) {
             if (preg_match('/<!-- class:([^\s]+) -->/', $script, $matches)) {
@@ -106,9 +118,11 @@ class MainLayout
                 if (str_starts_with(trim($script), '<script')) {
                     $script = preg_replace_callback(
                         '/<script\b([^>]*)>/i',
-                        function ($m) use ($rawClassName) {
+                        function ($m) use ($rawClassName, &$componentCounter) {
                             $attrs = $m[1];
-                            $encodedClass = 's' . base_convert(sprintf('%u', crc32($rawClassName)), 10, 36);
+                            $scriptHash = substr(md5($m[0]), 0, 8);
+                            $encodedClass = 's' . base_convert(sprintf('%u', crc32($rawClassName . $componentCounter . $scriptHash)), 10, 36);
+                            $componentCounter++;
 
                             if (!str_contains($attrs, 'pp-component=')) {
                                 $attrs .= " pp-component=\"{$encodedClass}\"";
@@ -150,6 +164,7 @@ class MainLayout
     public static function clearFooterScripts(): void
     {
         self::$footerScripts->clear();
+        self::$processedScripts = [];
     }
 
     /**

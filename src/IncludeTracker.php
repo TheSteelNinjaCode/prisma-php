@@ -10,7 +10,7 @@ use PPHP\PHPX\TemplateCompiler;
 
 class IncludeTracker
 {
-    public static array $sections = [];
+    private static array $sections = [];
 
     /**
      * Includes and echoes a file wrapped in a unique pp-component container.

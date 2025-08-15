@@ -108,12 +108,14 @@ class TemplateCompiler
         );
 
         if (!isset($_SERVER['HTTP_X_PPHP_NAVIGATION'])) {
-            $htmlContent = preg_replace(
-                '/<body([^>]*)>/i',
-                '<body$1 hidden>',
-                $htmlContent,
-                1
-            );
+            if (!PrismaPHPSettings::$option->backendOnly) {
+                $htmlContent = preg_replace(
+                    '/<body([^>]*)>/i',
+                    '<body$1 hidden>',
+                    $htmlContent,
+                    1
+                );
+            }
         }
 
         $bodyClosePattern = '/(<\/body\s*>)/i';
@@ -130,11 +132,23 @@ class TemplateCompiler
 
     private static function escapeAmpersands(string $content): string
     {
-        return preg_replace(
-            '/&(?![a-zA-Z][A-Za-z0-9]*;|#[0-9]+;|#x[0-9A-Fa-f]+;)/',
-            '&amp;',
-            $content
-        );
+        $parts = preg_split('/(<!\[CDATA\[[\s\S]*?\]\]>)/', $content, -1, PREG_SPLIT_DELIM_CAPTURE);
+        if ($parts === false) {
+            return $content;
+        }
+
+        foreach ($parts as $i => $part) {
+            if (str_starts_with($part, '<![CDATA[')) {
+                continue;
+            }
+
+            $parts[$i] = preg_replace(
+                '/&(?![a-zA-Z][A-Za-z0-9]*;|#[0-9]+;|#x[0-9A-Fa-f]+;)/',
+                '&amp;',
+                $part
+            );
+        }
+        return implode('', $parts);
     }
 
     private static function escapeAttributeAngles(string $html): string
@@ -180,31 +194,44 @@ class TemplateCompiler
 
     private static function normalizeNamedEntities(string $html): string
     {
-        return preg_replace_callback(
-            '/&([a-zA-Z][a-zA-Z0-9]+);/',
-            static function (array $m): string {
-                $decoded = html_entity_decode($m[0], ENT_HTML5, 'UTF-8');
+        $parts = preg_split('/(<!\[CDATA\[[\s\S]*?\]\]>)/', $html, -1, PREG_SPLIT_DELIM_CAPTURE);
+        if ($parts === false) {
+            return $html;
+        }
 
-                if ($decoded === $m[0]) {
-                    return $m[0];
-                }
+        foreach ($parts as $i => $part) {
+            if (str_starts_with($part, '<![CDATA[')) {
+                continue;
+            }
 
-                if (function_exists('mb_ord')) {
-                    return '&#' . mb_ord($decoded, 'UTF-8') . ';';
-                }
+            $parts[$i] = preg_replace_callback(
+                '/&([a-zA-Z][a-zA-Z0-9]+);/',
+                static function (array $m): string {
+                    $decoded = html_entity_decode($m[0], ENT_HTML5, 'UTF-8');
+                    if ($decoded === $m[0]) {
+                        return $m[0];
+                    }
+                    if (function_exists('mb_ord')) {
+                        return '&#' . mb_ord($decoded, 'UTF-8') . ';';
+                    }
+                    $code = unpack('N', mb_convert_encoding($decoded, 'UCS-4BE', 'UTF-8'))[1];
+                    return '&#' . $code . ';';
+                },
+                $part
+            );
+        }
 
-                $code = unpack('N', mb_convert_encoding($decoded, 'UCS-4BE', 'UTF-8'))[1];
-                return '&#' . $code . ';';
-            },
-            $html
-        );
+        return implode('', $parts);
     }
 
     private static function protectInlineScripts(string $html): string
     {
-        return preg_replace_callback(
-            '#<script\b([^>]*?)>(.*?)</script>#is',
-            static function ($m) {
+        if (stripos($html, '<script') === false) {
+            return $html;
+        }
+
+        $processScripts = static function (string $content): string {
+            $callback = static function (array $m): string {
                 if (preg_match('/\bsrc\s*=/i', $m[1])) {
                     return $m[0];
                 }
@@ -233,9 +260,33 @@ class TemplateCompiler
                 $code = str_replace(']]>', ']]]]><![CDATA[>', $m[2]);
 
                 return "<script{$m[1]}><![CDATA[\n{$code}\n]]></script>";
-            },
-            $html
-        );
+            };
+
+            $result = preg_replace_callback(
+                '#<script\b([^>]*?)>(.*?)</script>#is',
+                $callback,
+                $content
+            );
+
+            if ($result === null) {
+                $result = preg_replace_callback(
+                    '#<script\b([^>]*?)>(.*?)</script>#is',
+                    $callback,
+                    $content
+                );
+
+                return $result ?? $content;
+            }
+
+            return $result;
+        };
+
+        if (preg_match('/^(.*?<body\b[^>]*>)(.*?)(<\/body>.*)$/is', $html, $parts)) {
+            [$all, $beforeBody, $body, $afterBody] = $parts;
+            return $beforeBody . $processScripts($body) . $afterBody;
+        }
+
+        return $processScripts($html);
     }
 
     public static function innerXml(DOMNode $node): string
@@ -381,23 +432,35 @@ class TemplateCompiler
         string $componentName,
         array $incomingProps
     ): string {
-        $mapping       = self::selectComponentMapping($componentName);
-        $instance      = self::initializeComponentInstance($mapping, $incomingProps);
+        $mapping  = self::selectComponentMapping($componentName);
+
+        $baseId = 's' . base_convert(sprintf('%u', crc32($mapping['className'])), 10, 36);
+        $idx = self::$componentInstanceCounts[$baseId] ?? 0;
+        self::$componentInstanceCounts[$baseId] = $idx + 1;
+        $sectionId = $idx === 0 ? $baseId : "{$baseId}{$idx}";
+
+        $originalStack = self::$sectionStack;
+        self::$sectionStack[] = $sectionId;
+
+        PHPX::setRenderingContext($originalStack, $sectionId);
+
+        $instance = self::initializeComponentInstance($mapping, $incomingProps);
 
         $childHtml = '';
         foreach ($node->childNodes as $c) {
             $childHtml .= self::processNode($c);
         }
 
-        $instance->children = $childHtml;
+        self::$sectionStack = $originalStack;
 
-        $baseId   = 's' . base_convert(sprintf('%u', crc32($mapping['className'])), 10, 36);
-        $idx      = self::$componentInstanceCounts[$baseId] ?? 0;
-        self::$componentInstanceCounts[$baseId] = $idx + 1;
-        $sectionId = $idx === 0 ? $baseId : "{$baseId}{$idx}";
+        $instance->children = trim($childHtml);
 
-        $html     = $instance->render();
-        $fragDom  = self::convertToXml($html);
+        PHPX::setRenderingContext($originalStack, $sectionId);
+
+        $html = $instance->render();
+        $html = self::preprocessFragmentSyntax($html);
+
+        $fragDom = self::convertToXml($html);
         $root = $fragDom->documentElement;
         foreach ($root->childNodes as $c) {
             if ($c instanceof DOMElement) {
@@ -407,6 +470,14 @@ class TemplateCompiler
         }
 
         $htmlOut = self::innerXml($fragDom);
+        $htmlOut = preg_replace_callback(
+            '/<([a-z0-9-]+)([^>]*)\/>/i',
+            fn($m) => in_array(strtolower($m[1]), self::$selfClosingTags, true)
+                ? $m[0]
+                : "<{$m[1]}{$m[2]}></{$m[1]}>",
+            $htmlOut
+        );
+
         if (
             str_contains($htmlOut, '{{') ||
             self::hasComponentTag($htmlOut) ||
@@ -416,6 +487,14 @@ class TemplateCompiler
         }
 
         return $htmlOut;
+    }
+
+    private static function preprocessFragmentSyntax(string $content): string
+    {
+        $content = preg_replace('/<>/', '<Fragment>', $content);
+        $content = preg_replace('/<\/>/', '</Fragment>', $content);
+
+        return $content;
     }
 
     private static function selectComponentMapping(string $componentName): array
