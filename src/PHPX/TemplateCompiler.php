@@ -16,7 +16,6 @@ use Bootstrap;
 use LibXMLError;
 use ReflectionClass;
 use ReflectionProperty;
-use ReflectionType;
 use ReflectionNamedType;
 use PPHP\PHPX\TypeCoercer;
 use PPHP\PHPX\Exceptions\ComponentValidationException;
