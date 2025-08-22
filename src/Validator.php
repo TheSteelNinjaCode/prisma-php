@@ -16,6 +16,7 @@ use Brick\Math\Exception\MathException;
 use Brick\Math\RoundingMode;
 use InvalidArgumentException;
 use BackedEnum;
+use Throwable;
 
 final class Validator
 {
@@ -255,13 +256,15 @@ final class Validator
      */
     public static function dateTime($value, string $format = 'Y-m-d H:i:s'): ?string
     {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
         try {
-            if ($value instanceof DateTime) {
-                $date = $value;
-            } else {
-                $date = new DateTime($value);
-            }
-        } catch (Exception) {
+            $date = $value instanceof DateTime
+                ? $value
+                : new DateTime((string) $value);
+        } catch (Throwable) {
             return null;
         }
 
