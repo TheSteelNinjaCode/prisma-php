@@ -8,6 +8,8 @@ use PPHP\PHPX\IPHPX;
 use PPHP\PHPX\TwMerge;
 use PPHP\PrismaPHPSettings;
 use Exception;
+use DateTime;
+use DateTimeImmutable;
 
 class PHPX implements IPHPX
 {
@@ -27,16 +29,6 @@ class PHPX implements IPHPX
     protected array $attributesArray = [];
 
     /**
-     * @var array|null Component hierarchy set during rendering
-     */
-    protected static ?array $currentHierarchy = null;
-
-    /**
-     * @var string|null Current component ID
-     */
-    protected static ?string $currentComponentId = null;
-
-    /**
      * Constructor to initialize the component with the given properties.
      *
      * @param array<string, mixed> $props Optional properties to customize the component.
@@ -48,109 +40,59 @@ class PHPX implements IPHPX
     }
 
     /**
-     * Convert a property name to a JavaScript variable path.
+     * Converts a PHP value to a JavaScript-compatible string representation.
      *
-     * This method generates a JavaScript variable path for the given property name,
-     * based on the current component hierarchy. It is used to access properties in
-     * the JavaScript context of the component.
+     * This method handles various data types including booleans, nulls, numbers,
+     * strings, and objects like DateTime. It ensures that the output is suitable
+     * for embedding in JavaScript code, particularly within HTML attributes or scripts.
      *
-     * @param string $name The property name to convert.
-     * @return string The JavaScript variable path for the property.
-     */
-    protected function propsAsVar(string $name): string
-    {
-        if (empty($name)) {
-            return '';
-        }
-
-        $hierarchy = $this->getComponentHierarchy();
-
-        if (count($hierarchy) > 1 && end($hierarchy) === self::$currentComponentId) {
-            array_pop($hierarchy);
-        }
-
-        return "pphp.props." . implode('.', $hierarchy) . ".{$name}";
-    }
-
-    /**
-     * Emit a client-side dispatch call.
-     *
-     * @param non-empty-string|null $name  Reactive key (e.g. "myVar", "voucher.total", or "app.s9ggniz.myVar").
-     * @param string                $value Raw JS inserted verbatim (variable, expression, or pre-JSON-encoded value).
+     * @param mixed $value The PHP value to be converted.
      * @param array{
-     *   scope?: 'current'|'parent'|'root'|string[]
-     * }                              $options Dispatch options (defaults to ['scope' => 'current']).
-     *
-     * @return string JavaScript snippet like: pphp.dispatchEvent("myVar", 123, {"scope":"current"});
+     *     prettyPrint?: bool, // Whether to format the JSON output for readability. Default is false.
+     *     in_attr?: bool      // Whether the output will be used in an HTML attribute. Default is true.
+     * } $options Optional settings for conversion.
+     * @return string A string representation of the value suitable for JavaScript.
      */
-    protected function dispatchEvent(?string $name, string $value, array $options = []): string
+    public function toJs(mixed $value, array $options = []): string
     {
-        $name = trim((string) $name);
-        if ($name === '') {
-            return '';
+        $prettyPrint = $options['prettyPrint'] ?? false;
+        $inAttr      = $options['in_attr'] ?? true;
+        $flags       = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+        if ($prettyPrint) {
+            $flags |= JSON_PRETTY_PRINT;
         }
 
-        // normalize options
-        $opts = $options;
-        if (!array_key_exists('scope', $opts)) {
-            $opts['scope'] = 'current';
-        } else {
-            if (is_string($opts['scope'])) {
-                $allowed = ['current', 'parent', 'root'];
-                if (!in_array($opts['scope'], $allowed, true)) {
-                    $opts['scope'] = 'current';
+        $isSingleMustache = static function (string $s): bool {
+            $s = trim($s);
+            if ($s === '{}' || $s === '') return false;
+            if ($s[0] !== '{' || substr($s, -1) !== '}') return false;
+            return true;
+        };
+
+        return match (true) {
+            is_bool($value) => $value ? '{true}' : '{false}',
+            is_null($value) => '{null}',
+            is_int($value) || is_float($value) => (string) $value,
+
+            is_string($value) => (function () use ($value, $inAttr, $flags, $isSingleMustache) {
+                $trim = trim($value);
+
+                if ($isSingleMustache($trim)) {
+                    return $trim;
                 }
-            } elseif (is_array($opts['scope'])) {
-                $opts['scope'] = array_values(array_map('strval', $opts['scope']));
-            } else {
-                $opts['scope'] = 'current';
-            }
-        }
 
-        // safely encode name/options; value is inserted verbatim
-        $jsName = json_encode($name, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $jsOpts = json_encode($opts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                if ($inAttr) {
+                    return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+                }
 
-        return "pphp.dispatchEvent({$jsName}, {$value}, {$jsOpts});";
-    }
+                return json_encode($value, $flags) ?: '""';
+            })(),
 
-    /**
-     * Set the component hierarchy and current component ID (called by TemplateCompiler during rendering)
-     *
-     * @param array $hierarchy The component hierarchy
-     * @param string $currentId The current component ID
-     */
-    public static function setRenderingContext(array $hierarchy, string $currentId): void
-    {
-        self::$currentHierarchy = $hierarchy;
-        self::$currentComponentId = $currentId;
-    }
+            $value instanceof DateTime || $value instanceof DateTimeImmutable =>
+            json_encode($value->format('c'), $flags),
 
-    /**
-     * Get the parent component ID from the current hierarchy.
-     *
-     * @return string|null The parent component ID, or null if no parent exists
-     */
-    protected function getParentComponent(): ?string
-    {
-        $fullHierarchy = $this->getComponentHierarchy();
-
-        if (count($fullHierarchy) >= 2) {
-            return $fullHierarchy[count($fullHierarchy) - 2];
-        }
-
-        return null;
-    }
-
-    /**
-     * Get the full component hierarchy as an array.
-     * Useful for building complete hierarchy paths for JavaScript.
-     *
-     * @return array Array of component IDs from root to current
-     */
-    protected function getComponentHierarchy(): array
-    {
-        return self::$currentHierarchy ?? ['app'];
+            default => json_encode($value, $flags) ?: '{null}',
+        };
     }
 
     /**

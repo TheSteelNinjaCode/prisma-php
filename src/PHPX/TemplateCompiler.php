@@ -22,13 +22,13 @@ use PPHP\PHPX\Exceptions\ComponentValidationException;
 
 class TemplateCompiler
 {
-    private const BINDING_REGEX = '/\{\{\s*((?:(?!\{\{|\}\})[\s\S])*?)\s*\}\}/uS';
     private const ATTRIBUTE_REGEX = '/(\s[\w:-]+=)([\'"])(.*?)\2/s';
-    private const MUSTACHE_REGEX = '/\{\{[\s\S]*?\}\}/u';
     private const NAMED_ENTITY_REGEX = '/&([a-zA-Z][a-zA-Z0-9]+);/';
     private const COMPONENT_TAG_REGEX = '/<\/*[A-Z][\w-]*/u';
     private const SELF_CLOSING_REGEX = '/<([a-z0-9-]+)([^>]*)\/>/i';
     private const SCRIPT_REGEX = '#<script\b([^>]*?)>(.*?)</script>#is';
+    private const CONTEXT_ATTRIBUTE = 'pp-context';
+    private const COMPONENT_ATTRIBUTE = 'pp-component';
     private const HEAD_PATTERNS = [
         'open' => '/(<head\b[^>]*>)/i',
         'close' => '/(<\/head\s*>)/i',
@@ -50,6 +50,7 @@ class TemplateCompiler
         'children' => true,
         'key' => true,
         'ref' => true,
+        'pp-context' => true,
     ];
 
     private const SELF_CLOSING_TAGS = [
@@ -76,7 +77,7 @@ class TemplateCompiler
         'text/javascript' => true,
         'application/javascript' => true,
         'module' => true,
-        'text/php' => true,
+        'text/pp' => true,
     ];
 
     private static array $classMappings = [];
@@ -84,11 +85,13 @@ class TemplateCompiler
     private static array $sectionStack = [];
     private static int $compileDepth = 0;
     private static array $componentInstanceCounts = [];
+    private static array $contextStack = [];
 
     public static function compile(string $templateContent): string
     {
         if (self::$compileDepth === 0) {
             self::$componentInstanceCounts = [];
+            self::$contextStack = ['app'];
         }
         self::$compileDepth++;
 
@@ -143,16 +146,29 @@ class TemplateCompiler
 
     private static function processContentForXml(string $content): string
     {
-        return self::escapeMustacheAngles(
-            self::escapeAttributeAngles(
-                self::escapeLiteralTextContent(
-                    self::escapeAmpersands(
-                        self::normalizeNamedEntities(
+        return self::escapeAttributeAngles(
+            self::escapeLiteralTextContent(
+                self::escapeAmpersands(
+                    self::normalizeNamedEntities(
+                        self::escapeMustacheOperators(
                             self::protectInlineScripts($content)
                         )
                     )
                 )
             )
+        );
+    }
+
+    private static function escapeMustacheOperators(string $content): string
+    {
+        return preg_replace_callback(
+            '/\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/',
+            static function ($matches) {
+                $expression = $matches[1];
+                $escapedExpression = str_replace(['<', '>'], ['&lt;', '&gt;'], $expression);
+                return '{' . $escapedExpression . '}';
+            },
+            $content
         );
     }
 
@@ -228,15 +244,6 @@ class TemplateCompiler
 
                 return $openTag . $escapedContent . $closeTag;
             },
-            $content
-        );
-    }
-
-    private static function escapeMustacheAngles(string $content): string
-    {
-        return preg_replace_callback(
-            self::MUSTACHE_REGEX,
-            static fn($m) => str_replace(['<', '>'], ['&lt;', '&gt;'], $m[0]),
             $content
         );
     }
@@ -343,18 +350,17 @@ class TemplateCompiler
         $pushed = false;
 
         if ($tag === 'script' && !$node->hasAttribute('src') && !$node->hasAttribute('type')) {
-            $node->setAttribute('type', 'text/php');
+            $node->setAttribute('type', 'text/pp');
         }
 
-        // Handle component sections
-        if ($node->hasAttribute('pp-component')) {
-            self::$sectionStack[] = $node->getAttribute('pp-component');
+        if ($node->hasAttribute(self::COMPONENT_ATTRIBUTE)) {
+            $componentId = $node->getAttribute(self::COMPONENT_ATTRIBUTE);
+            self::$sectionStack[] = $componentId;
+            self::$contextStack[] = $componentId;
             $pushed = true;
         }
 
         try {
-            self::processAttributes($node);
-
             if (isset(self::$classMappings[$node->nodeName])) {
                 return self::renderComponent(
                     $node,
@@ -370,8 +376,14 @@ class TemplateCompiler
         } finally {
             if ($pushed) {
                 array_pop(self::$sectionStack);
+                array_pop(self::$contextStack);
             }
         }
+    }
+
+    private static function getCurrentContext(): string
+    {
+        return end(self::$contextStack) ?: 'app';
     }
 
     private static function processTextNode(DOMText $node): string
@@ -386,19 +398,7 @@ class TemplateCompiler
             );
         }
 
-        return preg_replace_callback(
-            self::BINDING_REGEX,
-            static fn($m) => self::processBindingExpression(trim($m[1])),
-            $node->textContent
-        );
-    }
-
-    private static function processBindingExpression(string $expr): string
-    {
-        $escaped = htmlspecialchars($expr, ENT_QUOTES, 'UTF-8');
-        $attribute = preg_match('/^[\w.]+$/u', $expr) ? 'pp-bind' : 'pp-bind-expr';
-
-        return "<span {$attribute}=\"{$escaped}\"></span>";
+        return $node->textContent;
     }
 
     protected static function renderComponent(
@@ -410,19 +410,47 @@ class TemplateCompiler
         $sectionId = self::generateSectionId($mapping['className']);
 
         $originalStack = self::$sectionStack;
+        $originalContextStack = self::$contextStack;
+
+        $parentContext = self::getCurrentContext();
+
         self::$sectionStack[] = $sectionId;
+        self::$contextStack[] = $sectionId;
 
         try {
-            PHPX::setRenderingContext($originalStack, $sectionId);
-
             $instance = self::initializeComponentInstance($mapping, $incomingProps);
-            $instance->children = self::getChildrenHtml($node);
 
-            PHPX::setRenderingContext($originalStack, $sectionId);
+            $instance->children = self::getChildrenWithContextInheritance($node, $parentContext, $sectionId);
 
-            return self::compileComponentHtml($instance->render(), $sectionId);
+            return self::compileComponentHtml($instance->render(), $sectionId, $incomingProps, $parentContext);
         } finally {
             self::$sectionStack = $originalStack;
+            self::$contextStack = $originalContextStack;
+        }
+    }
+
+    private static function getChildrenWithContextInheritance(DOMElement $node, string $parentContext, string $componentId): string
+    {
+        $originalContextStack = self::$contextStack;
+
+        self::$contextStack = [$parentContext];
+
+        try {
+            $output = [];
+            foreach ($node->childNodes as $child) {
+                if ($child instanceof DOMElement) {
+                    if (
+                        !$child->hasAttribute(self::CONTEXT_ATTRIBUTE) &&
+                        !isset(self::$classMappings[$child->nodeName])
+                    ) {
+                        $child->setAttribute(self::CONTEXT_ATTRIBUTE, $parentContext);
+                    }
+                }
+                $output[] = self::processNode($child);
+            }
+            return trim(implode('', $output));
+        } finally {
+            self::$contextStack = $originalContextStack;
         }
     }
 
@@ -435,23 +463,27 @@ class TemplateCompiler
         return $idx === 0 ? $baseId : "{$baseId}{$idx}";
     }
 
-    private static function getChildrenHtml(DOMElement $node): string
-    {
-        $output = [];
-        foreach ($node->childNodes as $child) {
-            $output[] = self::processNode($child);
-        }
-        return trim(implode('', $output));
-    }
-
-    private static function compileComponentHtml(string $html, string $sectionId): string
+    private static function compileComponentHtml(string $html, string $sectionId, array $incomingProps = [], string $parentContext = ''): string
     {
         $html = self::preprocessFragmentSyntax($html);
         $fragDom = self::convertToXml($html);
 
+        $hasEventListeners = self::hasEventListeners($incomingProps);
+        $eventListeners = self::getEventListeners($incomingProps);
+
         foreach ($fragDom->documentElement->childNodes as $child) {
             if ($child instanceof DOMElement) {
-                $child->setAttribute('pp-component', $sectionId);
+                $child->setAttribute(self::COMPONENT_ATTRIBUTE, $sectionId);
+
+                if ($hasEventListeners && !empty($parentContext)) {
+                    $child->setAttribute(self::CONTEXT_ATTRIBUTE, $parentContext);
+
+                    foreach ($eventListeners as $eventName => $eventHandler) {
+                        $child->setAttribute($eventName, $eventHandler);
+                    }
+                } else if ($child->hasAttribute(self::CONTEXT_ATTRIBUTE)) {
+                    $child->removeAttribute(self::CONTEXT_ATTRIBUTE);
+                }
                 break;
             }
         }
@@ -464,6 +496,27 @@ class TemplateCompiler
         }
 
         return $htmlOut;
+    }
+
+    private static function hasEventListeners(array $props): bool
+    {
+        foreach ($props as $key => $value) {
+            if (str_starts_with(strtolower($key), 'on') && strlen($key) > 2) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function getEventListeners(array $props): array
+    {
+        $eventListeners = [];
+        foreach ($props as $key => $value) {
+            if (str_starts_with(strtolower($key), 'on') && strlen($key) > 2) {
+                $eventListeners[$key] = $value;
+            }
+        }
+        return $eventListeners;
     }
 
     private static function needsRecompilation(string $html): bool
@@ -617,15 +670,6 @@ class TemplateCompiler
         return str_replace(['<>', '</>'], ['<Fragment>', '</Fragment>'], $content);
     }
 
-    private static function processAttributes(DOMElement $node): void
-    {
-        foreach ($node->attributes as $attr) {
-            if (preg_match(self::BINDING_REGEX, $attr->value, $matches)) {
-                $node->setAttribute("pp-bind-{$attr->name}", trim($matches[1]));
-            }
-        }
-    }
-
     private static function getNodeAttributes(DOMElement $node): array
     {
         $attrs = [];
@@ -640,23 +684,40 @@ class TemplateCompiler
         $children = $attrs['children'] ?? '';
         unset($attrs['children']);
 
+        $isComponent = isset($attrs[self::COMPONENT_ATTRIBUTE]);
+
         if (empty($attrs)) {
             $attrStr = '';
         } else {
             $pairs = [];
             foreach ($attrs as $name => $value) {
+                if ($value === '' && !in_array($name, ['value', 'class', self::CONTEXT_ATTRIBUTE], true)) {
+                    continue;
+                }
+
+                $htmlAttrName = $isComponent ? self::camelToKebab($name) : $name;
+
                 $pairs[] = sprintf(
                     '%s="%s"',
-                    $name,
+                    $htmlAttrName,
                     htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
                 );
             }
-            $attrStr = ' ' . implode(' ', $pairs);
+            $attrStr = empty($pairs) ? '' : ' ' . implode(' ', $pairs);
         }
 
         return isset(self::SELF_CLOSING_TAGS[strtolower($tag)])
             ? "<{$tag}{$attrStr} />"
             : "<{$tag}{$attrStr}>{$children}</{$tag}>";
+    }
+
+    private static function camelToKebab(string $string): string
+    {
+        if (isset(self::SYSTEM_PROPS[$string]) || str_contains($string, '-')) {
+            return $string;
+        }
+
+        return strtolower(preg_replace('/[A-Z]/', '-$0', $string));
     }
 
     protected static function initializeClassMappings(): void
