@@ -1,7 +1,7 @@
 <?php
-namespace PPHP\Security;
+namespace PP\Security;
 
-use PPHP\Headers\Boom;
+use PP\Headers\Boom;
 
 final class RateLimiter
 {

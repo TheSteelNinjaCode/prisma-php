@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace PPHP;
+namespace PP;
 
-use PPHP\Headers\Boom;
+use PP\Headers\Boom;
 use ArrayObject;
 use stdClass;
-use PPHP\PrismaPHPSettings;
+use PP\PrismaPHPSettings;
 
 class Request
 {
@@ -275,7 +275,7 @@ class Request
     private static function isWireRequest(): bool
     {
         $headers = array_change_key_case(getallheaders(), CASE_LOWER);
-        return isset($headers['http_pphp_wire_request']) && strtolower($headers['http_pphp_wire_request']) === 'true';
+        return isset($headers['http_pp_wire_request']) && strtolower($headers['http_pp_wire_request']) === 'true';
     }
 
     /**
@@ -288,7 +288,7 @@ class Request
         $serverFetchSite = $_SERVER['HTTP_SEC_FETCH_SITE'] ?? '';
         if (isset($serverFetchSite) && $serverFetchSite === 'same-origin') {
             $headers = array_change_key_case(getallheaders(), CASE_LOWER);
-            return isset($headers['http_pphp_x_file_request']) && $headers['http_pphp_x_file_request'] === 'true';
+            return isset($headers['http_pp_x_file_request']) && $headers['http_pp_x_file_request'] === 'true';
         }
 
         return false;

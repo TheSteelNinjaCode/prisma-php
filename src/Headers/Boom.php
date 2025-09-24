@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PPHP\Headers;
+namespace PP\Headers;
 
 use InvalidArgumentException;
 use JsonException;

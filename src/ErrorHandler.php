@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace PPHP;
+namespace PP;
 
 use Bootstrap;
-use PPHP\MainLayout;
+use PP\MainLayout;
 use Throwable;
-use PPHP\PHPX\Exceptions\ComponentValidationException;
+use PP\PHPX\Exceptions\ComponentValidationException;
 
 class ErrorHandler
 {

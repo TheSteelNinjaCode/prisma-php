@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PPHP;
+namespace PP;
 
 use Exception;
 
@@ -175,7 +175,7 @@ class PrismaPHPSettings
 
     private static function getLocalStorageKey(): string
     {
-        $localStorageKey = $_ENV['LOCALSTORE_KEY'] ?? 'pphp_local_store_59e13';
+        $localStorageKey = $_ENV['LOCALSTORE_KEY'] ?? 'pp_local_store_59e13';
         return strtolower(preg_replace('/\s+/', '_', trim($localStorageKey)));
     }
 }

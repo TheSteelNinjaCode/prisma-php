@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace PPHP;
+namespace PP;
 
-use PPHP\Set;
+use PP\Set;
 
 class MainLayout
 {

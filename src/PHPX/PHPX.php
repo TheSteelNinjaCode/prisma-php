@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace PPHP\PHPX;
+namespace PP\PHPX;
 
-use PPHP\PHPX\IPHPX;
-use PPHP\PHPX\TwMerge;
-use PPHP\PrismaPHPSettings;
+use PP\PHPX\IPHPX;
+use PP\PHPX\TwMerge;
+use PP\PrismaPHPSettings;
 use Exception;
 use DateTime;
 use DateTimeImmutable;

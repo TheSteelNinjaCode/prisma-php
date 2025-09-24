@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace PPHP\PHPX;
+namespace PP\PHPX;
 
-use PPHP\PHPX\PHPX;
+use PP\PHPX\PHPX;
 
 class Fragment extends PHPX
 {

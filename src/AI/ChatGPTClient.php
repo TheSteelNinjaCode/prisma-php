@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace PPHP\AI;
+namespace PP\AI;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
-use PPHP\Validator;
+use PP\Validator;
 use RuntimeException;
 
 class ChatGPTClient

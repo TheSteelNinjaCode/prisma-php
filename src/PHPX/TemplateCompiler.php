@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace PPHP\PHPX;
+namespace PP\PHPX;
 
-use PPHP\PrismaPHPSettings;
-use PPHP\MainLayout;
+use PP\PrismaPHPSettings;
+use PP\MainLayout;
 use DOMDocument;
 use DOMElement;
 use DOMComment;
@@ -17,8 +17,8 @@ use LibXMLError;
 use ReflectionClass;
 use ReflectionProperty;
 use ReflectionNamedType;
-use PPHP\PHPX\TypeCoercer;
-use PPHP\PHPX\Exceptions\ComponentValidationException;
+use PP\PHPX\TypeCoercer;
+use PP\PHPX\Exceptions\ComponentValidationException;
 
 class TemplateCompiler
 {
@@ -122,7 +122,7 @@ class TemplateCompiler
         }
 
         if (
-            !isset($_SERVER['HTTP_X_PPHP_NAVIGATION']) &&
+            !isset($_SERVER['HTTP_X_PP_NAVIGATION']) &&
             !PrismaPHPSettings::$option->backendOnly
         ) {
             $htmlContent = preg_replace(

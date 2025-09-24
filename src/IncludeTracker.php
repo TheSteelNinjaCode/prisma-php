@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace PPHP;
+namespace PP;
 
 use RuntimeException;
 use InvalidArgumentException;
-use PPHP\PHPX\TemplateCompiler;
+use PP\PHPX\TemplateCompiler;
 
 class IncludeTracker
 {

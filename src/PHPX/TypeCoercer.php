@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace PPHP\PHPX;
+namespace PP\PHPX;
 
-use PPHP\Validator;
+use PP\Validator;
 use ReflectionType;
 use ReflectionNamedType;
 use ReflectionUnionType;

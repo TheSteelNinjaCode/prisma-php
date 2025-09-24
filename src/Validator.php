@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PPHP;
+namespace PP;
 
 use HTMLPurifier;
 use HTMLPurifier_Config;

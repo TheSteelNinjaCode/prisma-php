@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace PPHP;
+namespace PP;
 
-use PPHP\PrismaPHPSettings;
+use PP\PrismaPHPSettings;
 
 class CacheHandler
 {

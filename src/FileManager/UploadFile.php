@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PPHP\FileManager;
+namespace PP\FileManager;
 
 class UploadFile
 {
