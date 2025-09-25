@@ -470,16 +470,41 @@ class TemplateCompiler
 
         $hasEventListeners = self::hasEventListeners($incomingProps);
         $eventListeners = self::getEventListeners($incomingProps);
+        $regularProps = self::getRegularProps($incomingProps);
 
         foreach ($fragDom->documentElement->childNodes as $child) {
             if ($child instanceof DOMElement) {
                 $child->setAttribute(self::COMPONENT_ATTRIBUTE, $sectionId);
 
+                foreach ($regularProps as $propName => $propValue) {
+                    if (self::containsMustacheSyntax($propValue)) {
+                        $kebabName = self::camelToKebab($propName);
+
+                        if ($child->hasAttribute($propName)) {
+                            $child->removeAttribute($propName);
+                        }
+
+                        $child->setAttribute($kebabName, $propValue);
+                    } else {
+                        $child->setAttribute($propName, $propValue);
+                    }
+                }
+
                 if ($hasEventListeners && !empty($parentContext)) {
                     $child->setAttribute(self::CONTEXT_ATTRIBUTE, $parentContext);
 
                     foreach ($eventListeners as $eventName => $eventHandler) {
-                        $child->setAttribute($eventName, $eventHandler);
+                        if (self::containsMustacheSyntax($eventHandler)) {
+                            $kebabEventName = self::camelToKebab($eventName);
+
+                            if ($child->hasAttribute($eventName)) {
+                                $child->removeAttribute($eventName);
+                            }
+
+                            $child->setAttribute($kebabEventName, $eventHandler);
+                        } else {
+                            $child->setAttribute($eventName, $eventHandler);
+                        }
                     }
                 } else if ($child->hasAttribute(self::CONTEXT_ATTRIBUTE)) {
                     $child->removeAttribute(self::CONTEXT_ATTRIBUTE);
@@ -496,6 +521,26 @@ class TemplateCompiler
         }
 
         return $htmlOut;
+    }
+
+    private static function containsMustacheSyntax(string $value): bool
+    {
+        return str_contains($value, '{') && str_contains($value, '}');
+    }
+
+    private static function getRegularProps(array $props): array
+    {
+        $regularProps = [];
+        foreach ($props as $key => $value) {
+            if (
+                !isset(self::SYSTEM_PROPS[$key]) &&
+                $key !== 'children' &&
+                !(str_starts_with(strtolower($key), 'on') && strlen($key) > 2)
+            ) {
+                $regularProps[$key] = $value;
+            }
+        }
+        return $regularProps;
     }
 
     private static function hasEventListeners(array $props): bool
@@ -717,7 +762,7 @@ class TemplateCompiler
             return $string;
         }
 
-        return strtolower(preg_replace('/[A-Z]/', '-$0', $string));
+        return strtolower(preg_replace('/([a-z])([A-Z])/', '$1-$2', $string));
     }
 
     protected static function initializeClassMappings(): void
