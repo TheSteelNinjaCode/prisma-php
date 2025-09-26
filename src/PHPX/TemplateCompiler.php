@@ -503,9 +503,11 @@ class TemplateCompiler
                     }
                 }
 
-                if ($hasEventListeners && !empty($parentContext)) {
+                if (!empty($parentContext)) {
                     $child->setAttribute(self::CONTEXT_ATTRIBUTE, $parentContext);
+                }
 
+                if ($hasEventListeners) {
                     foreach ($eventListeners as $eventName => $eventHandler) {
                         if (self::containsMustacheSyntax($eventHandler)) {
                             $kebabEventName = self::camelToKebab($eventName);
@@ -519,9 +521,8 @@ class TemplateCompiler
                             $child->setAttribute($eventName, $eventHandler);
                         }
                     }
-                } else if ($child->hasAttribute(self::CONTEXT_ATTRIBUTE)) {
-                    $child->removeAttribute(self::CONTEXT_ATTRIBUTE);
                 }
+
                 break;
             }
         }
