@@ -439,18 +439,31 @@ class TemplateCompiler
             $output = [];
             foreach ($node->childNodes as $child) {
                 if ($child instanceof DOMElement) {
-                    if (
-                        !$child->hasAttribute(self::CONTEXT_ATTRIBUTE) &&
-                        !isset(self::$classMappings[$child->nodeName])
-                    ) {
-                        $child->setAttribute(self::CONTEXT_ATTRIBUTE, $parentContext);
-                    }
+                    self::applyContextToElementTree($child, $parentContext);
                 }
                 $output[] = self::processNode($child);
             }
             return trim(implode('', $output));
         } finally {
             self::$contextStack = $originalContextStack;
+        }
+    }
+
+    private static function applyContextToElementTree(DOMElement $element, string $context): void
+    {
+        if (
+            !$element->hasAttribute(self::CONTEXT_ATTRIBUTE) &&
+            !isset(self::$classMappings[$element->nodeName])
+        ) {
+            $element->setAttribute(self::CONTEXT_ATTRIBUTE, $context);
+        }
+
+        foreach ($element->childNodes as $child) {
+            if ($child instanceof DOMElement) {
+                if (!isset(self::$classMappings[$child->nodeName])) {
+                    self::applyContextToElementTree($child, $context);
+                }
+            }
         }
     }
 
