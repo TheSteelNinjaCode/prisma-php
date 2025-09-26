@@ -490,16 +490,16 @@ class TemplateCompiler
                 $child->setAttribute(self::COMPONENT_ATTRIBUTE, $sectionId);
 
                 foreach ($regularProps as $propName => $propValue) {
+                    $kebabName = self::camelToKebab($propName);
+
+                    if ($child->hasAttribute($propName) || $child->hasAttribute($kebabName)) {
+                        continue;
+                    }
+
                     if (self::containsMustacheSyntax($propValue)) {
-                        $kebabName = self::camelToKebab($propName);
-
-                        if ($child->hasAttribute($propName)) {
-                            $child->removeAttribute($propName);
-                        }
-
                         $child->setAttribute($kebabName, $propValue);
                     } else {
-                        $child->setAttribute($propName, $propValue);
+                        $child->setAttribute($kebabName, $propValue);
                     }
                 }
 
