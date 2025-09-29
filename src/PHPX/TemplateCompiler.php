@@ -19,6 +19,7 @@ use ReflectionProperty;
 use ReflectionNamedType;
 use PP\PHPX\TypeCoercer;
 use PP\PHPX\Exceptions\ComponentValidationException;
+use DOMXPath;
 
 class TemplateCompiler
 {
@@ -484,6 +485,7 @@ class TemplateCompiler
         $hasEventListeners = self::hasEventListeners($incomingProps);
         $eventListeners = self::getEventListeners($incomingProps);
         $regularProps = self::getRegularProps($incomingProps);
+        $existingAttributes = self::getAllExistingAttributes($fragDom);
 
         foreach ($fragDom->documentElement->childNodes as $child) {
             if ($child instanceof DOMElement) {
@@ -492,7 +494,12 @@ class TemplateCompiler
                 foreach ($regularProps as $propName => $propValue) {
                     $kebabName = self::camelToKebab($propName);
 
-                    if ($child->hasAttribute($propName) || $child->hasAttribute($kebabName)) {
+                    if (
+                        $child->hasAttribute($propName) ||
+                        $child->hasAttribute($kebabName) ||
+                        isset($existingAttributes[$propName]) ||
+                        isset($existingAttributes[$kebabName])
+                    ) {
                         continue;
                     }
 
@@ -509,9 +516,16 @@ class TemplateCompiler
 
                 if ($hasEventListeners) {
                     foreach ($eventListeners as $eventName => $eventHandler) {
-                        if (self::containsMustacheSyntax($eventHandler)) {
-                            $kebabEventName = self::camelToKebab($eventName);
+                        $kebabEventName = self::camelToKebab($eventName);
 
+                        if (
+                            isset($existingAttributes[$eventName]) ||
+                            isset($existingAttributes[$kebabEventName])
+                        ) {
+                            continue;
+                        }
+
+                        if (self::containsMustacheSyntax($eventHandler)) {
                             if ($child->hasAttribute($eventName)) {
                                 $child->removeAttribute($eventName);
                             }
@@ -527,6 +541,10 @@ class TemplateCompiler
             }
         }
 
+        if ($hasEventListeners && !empty($parentContext)) {
+            self::applyParentContextToEventElements($fragDom, $eventListeners, $parentContext, $sectionId);
+        }
+
         $htmlOut = self::innerXml($fragDom);
         $htmlOut = self::normalizeSelfClosingTags($htmlOut);
 
@@ -535,6 +553,69 @@ class TemplateCompiler
         }
 
         return $htmlOut;
+    }
+
+    private static function applyParentContextToEventElements(
+        DOMDocument $fragDom,
+        array $eventListeners,
+        string $parentContext,
+        string $sectionId
+    ): void {
+        $xpath = new DOMXPath($fragDom);
+
+        foreach ($eventListeners as $eventName => $eventHandler) {
+            $kebabEventName = self::camelToKebab($eventName);
+
+            $eventElements = $xpath->query("//*[@{$eventName} or @{$kebabEventName}]");
+
+            foreach ($eventElements as $element) {
+                if ($element instanceof DOMElement) {
+                    $hasParentEvent = false;
+
+                    if ($element->hasAttribute($eventName)) {
+                        $attrValue = $element->getAttribute($eventName);
+                        if (
+                            $attrValue === $eventHandler ||
+                            (self::containsMustacheSyntax($eventHandler) && $attrValue === $eventHandler)
+                        ) {
+                            $hasParentEvent = true;
+                        }
+                    }
+
+                    if (!$hasParentEvent && $element->hasAttribute($kebabEventName)) {
+                        $attrValue = $element->getAttribute($kebabEventName);
+                        if (
+                            $attrValue === $eventHandler ||
+                            (self::containsMustacheSyntax($eventHandler) && $attrValue === $eventHandler)
+                        ) {
+                            $hasParentEvent = true;
+                        }
+                    }
+
+                    if ($hasParentEvent) {
+                        $element->setAttribute(self::CONTEXT_ATTRIBUTE, $parentContext);
+                    }
+                }
+            }
+        }
+    }
+
+    private static function getAllExistingAttributes(DOMDocument $fragDom): array
+    {
+        $existingAttributes = [];
+
+        $xpath = new DOMXPath($fragDom);
+        $allElements = $xpath->query('//*[@*]');
+
+        foreach ($allElements as $element) {
+            if ($element instanceof DOMElement) {
+                foreach ($element->attributes as $attr) {
+                    $existingAttributes[$attr->name] = true;
+                }
+            }
+        }
+
+        return $existingAttributes;
     }
 
     private static function containsMustacheSyntax(string $value): bool
