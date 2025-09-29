@@ -129,7 +129,7 @@ class MainLayout
                             }
 
                             if (!preg_match('/\btype\s*=\s*(["\'])[^\1]*\1|\btype\s*=\s*\S+/i', $attrs)) {
-                                $attrs .= ' type="text/php"';
+                                $attrs .= ' type="text/pp"';
                             }
 
                             return "<script{$attrs}>";
