@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace PP;
 
-use HTMLPurifier;
-use HTMLPurifier_Config;
 use DateTime;
 use Exception;
 use Symfony\Component\Uid\Uuid;
@@ -360,19 +358,6 @@ final class Validator
         }
 
         return $cast($value);
-    }
-
-    /**
-     * Purify and sanitize HTML content.
-     *
-     * @param string $html The HTML content to purify.
-     * @return string The purified HTML content.
-     */
-    public static function html(string $html): string
-    {
-        $config = HTMLPurifier_Config::createDefault();
-        $purifier = new HTMLPurifier($config);
-        return $purifier->purify($html);
     }
 
     /**
