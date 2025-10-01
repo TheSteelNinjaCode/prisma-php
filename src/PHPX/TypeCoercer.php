@@ -314,7 +314,6 @@ class TypeCoercer
                 'cuid' => Validator::cuid($value) ?? Validator::string($value, $escapeHtml),
                 'cuid2' => Validator::cuid2($value) ?? Validator::string($value, $escapeHtml),
                 'ip' => Validator::ip($value) ?? Validator::string($value, $escapeHtml),
-                'html' => Validator::html(Validator::string($value, false)),
                 'emojis' => Validator::emojis(Validator::string($value, $escapeHtml)),
                 default => Validator::string($value, $escapeHtml),
             };
