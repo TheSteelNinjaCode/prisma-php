@@ -370,6 +370,12 @@ class TemplateCompiler
                 );
             }
 
+            if (preg_match('/^[A-Z]/', $node->nodeName)) {
+                throw new RuntimeException(
+                    "Component '{$node->nodeName}' not found. Make sure it's properly registered."
+                );
+            }
+
             $children = implode('', self::processChildNodes($node->childNodes));
             $attrs = self::getNodeAttributes($node) + ['children' => $children];
 
@@ -482,6 +488,8 @@ class TemplateCompiler
         $html = self::preprocessFragmentSyntax($html);
         $fragDom = self::convertToXml($html);
 
+        self::normalizeComponentAttributes($fragDom);
+
         $hasEventListeners = self::hasEventListeners($incomingProps);
         $eventListeners = self::getEventListeners($incomingProps);
         $regularProps = self::getRegularProps($incomingProps);
@@ -553,6 +561,37 @@ class TemplateCompiler
         }
 
         return $htmlOut;
+    }
+
+    private static function normalizeComponentAttributes(DOMDocument $dom): void
+    {
+        $xpath = new DOMXPath($dom);
+        $allElements = $xpath->query('//*');
+
+        foreach ($allElements as $element) {
+            if (!($element instanceof DOMElement)) {
+                continue;
+            }
+
+            $attributesToRename = [];
+
+            foreach ($element->attributes as $attr) {
+                $attrName = $attr->name;
+                $kebabName = self::camelToKebab($attrName);
+
+                if ($kebabName !== $attrName) {
+                    $attributesToRename[$attrName] = [
+                        'kebabName' => $kebabName,
+                        'value' => $attr->value
+                    ];
+                }
+            }
+
+            foreach ($attributesToRename as $oldName => $info) {
+                $element->removeAttribute($oldName);
+                $element->setAttribute($info['kebabName'], $info['value']);
+            }
+        }
     }
 
     private static function applyParentContextToEventElements(

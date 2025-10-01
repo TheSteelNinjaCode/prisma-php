@@ -22,6 +22,15 @@ class MainLayout
 
     private static array $processedScripts = [];
 
+    private const SYSTEM_PROPS = [
+        'children' => true,
+        'key' => true,
+        'ref' => true,
+        'pp-context' => true,
+        'pp-component' => true,
+        'type' => true,
+    ];
+
     public static function init(): void
     {
         if (self::$headScripts === null) {
@@ -124,15 +133,21 @@ class MainLayout
                             $encodedClass = 's' . base_convert(sprintf('%u', crc32($rawClassName . $componentCounter . $scriptHash)), 10, 36);
                             $componentCounter++;
 
-                            if (!str_contains($attrs, 'pp-component=')) {
-                                $attrs .= " pp-component=\"{$encodedClass}\"";
+                            $parsedAttrs = self::parseScriptAttributes($attrs);
+
+                            if (!isset($parsedAttrs['pp-component'])) {
+                                $parsedAttrs['pp-component'] = $encodedClass;
                             }
 
-                            if (!preg_match('/\btype\s*=\s*(["\'])[^\1]*\1|\btype\s*=\s*\S+/i', $attrs)) {
-                                $attrs .= ' type="text/pp"';
+                            if (!isset($parsedAttrs['type'])) {
+                                $parsedAttrs['type'] = 'text/pp';
                             }
 
-                            return "<script{$attrs}>";
+                            $parsedAttrs = self::convertAttributesToKebabCase($parsedAttrs);
+
+                            $newAttrs = self::buildAttributesString($parsedAttrs);
+
+                            return "<script{$newAttrs}>";
                         },
                         $script,
                         1
@@ -144,6 +159,95 @@ class MainLayout
         }
 
         return implode("\n", $processed);
+    }
+
+    /**
+     * Parses script tag attributes into an associative array.
+     *
+     * @param string $attrString The attributes string from the script tag.
+     * @return array The parsed attributes.
+     */
+    private static function parseScriptAttributes(string $attrString): array
+    {
+        $attributes = [];
+        $attrString = trim($attrString);
+
+        if (empty($attrString)) {
+            return $attributes;
+        }
+
+        preg_match_all(
+            '/(\w[\w:-]*)\s*(?:=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+)))?/i',
+            $attrString,
+            $matches,
+            PREG_SET_ORDER
+        );
+
+        foreach ($matches as $match) {
+            $name = $match[1];
+            $value = $match[2] ?? $match[3] ?? $match[4] ?? '';
+            $attributes[$name] = $value;
+        }
+
+        return $attributes;
+    }
+
+    /**
+     * Converts camelCase attribute names to kebab-case for component attributes.
+     *
+     * @param array $attributes The attributes array.
+     * @return array The converted attributes.
+     */
+    private static function convertAttributesToKebabCase(array $attributes): array
+    {
+        $converted = [];
+
+        foreach ($attributes as $name => $value) {
+            $kebabName = self::camelToKebab($name);
+            $converted[$kebabName] = $value;
+        }
+
+        return $converted;
+    }
+
+    /**
+     * Converts camelCase string to kebab-case.
+     *
+     * @param string $string The string to convert.
+     * @return string The kebab-case string.
+     */
+    private static function camelToKebab(string $string): string
+    {
+        if (isset(self::SYSTEM_PROPS[$string]) || str_contains($string, '-')) {
+            return $string;
+        }
+
+        return strtolower(preg_replace('/([a-z])([A-Z])/', '$1-$2', $string));
+    }
+
+    /**
+     * Builds an attributes string from an associative array.
+     *
+     * @param array $attributes The attributes array.
+     * @return string The attributes string.
+     */
+    private static function buildAttributesString(array $attributes): string
+    {
+        if (empty($attributes)) {
+            return '';
+        }
+
+        $pairs = [];
+        foreach ($attributes as $name => $value) {
+            if ($value === '') {
+                $pairs[] = $name;
+            } else {
+                $escapedValue = htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+                $pairs[] = sprintf('%s="%s"', $name, $escapedValue);
+            }
+        }
+
+        return ' ' . implode(' ', $pairs);
     }
 
     /**

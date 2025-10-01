@@ -40,24 +40,27 @@ class PHPX implements IPHPX
     }
 
     /**
-     * Converts a PHP value to a JavaScript-compatible string representation.
+     * Converts a PHP value to a JavaScript-compatible representation.
      *
      * This method handles various data types including booleans, nulls, numbers,
-     * strings, and objects like DateTime. It ensures that the output is suitable
-     * for embedding in JavaScript code, particularly within HTML attributes or scripts.
+     * strings, and objects like DateTime. It can return either raw PHP values or
+     * string representations suitable for embedding in JavaScript code.
      *
      * @param mixed $value The PHP value to be converted.
      * @param array{
-     *     prettyPrint?: bool, // Whether to format the JSON output for readability. Default is false.
+     *     asString?: bool,    // Whether to return as string representation. Default is true.
+     *     prettyPrint?: bool, // Whether to format JSON output for readability. Default is false.
      *     in_attr?: bool      // Whether the output will be used in an HTML attribute. Default is true.
      * } $options Optional settings for conversion.
-     * @return string A string representation of the value suitable for JavaScript.
+     * @return mixed|string Raw value if asString is false, otherwise string representation.
      */
-    public function toJs(mixed $value, array $options = []): string
+    public function toRaw(mixed $value, array $options = []): mixed
     {
+        $asString    = $options['asString'] ?? true;
         $prettyPrint = $options['prettyPrint'] ?? false;
         $inAttr      = $options['in_attr'] ?? true;
         $flags       = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+
         if ($prettyPrint) {
             $flags |= JSON_PRETTY_PRINT;
         }
@@ -69,16 +72,33 @@ class PHPX implements IPHPX
             return true;
         };
 
-        return match (true) {
-            is_bool($value) => $value ? '{true}' : '{false}',
-            is_null($value) => '{null}',
-            is_int($value) || is_float($value) => (string) $value,
+        $processedValue = match (true) {
+            is_bool($value) => $asString ? ($value ? 'true' : 'false') : $value,
+            is_null($value) => $asString ? 'null' : null,
+            is_int($value) || is_float($value) => $asString ? (string) $value : $value,
 
-            is_string($value) => (function () use ($value, $inAttr, $flags, $isSingleMustache) {
+            is_string($value) => (function () use ($value, $asString, $inAttr, $flags, $isSingleMustache) {
                 $trim = trim($value);
 
                 if ($isSingleMustache($trim)) {
-                    return $trim;
+                    $content = substr($trim, 1, -1);
+
+                    if ($content === 'true') return $asString ? 'true' : true;
+                    if ($content === 'false') return $asString ? 'false' : false;
+                    if ($content === 'null') return $asString ? 'null' : null;
+
+                    if (is_numeric($content)) {
+                        if ($asString) {
+                            return $content;
+                        }
+                        return str_contains($content, '.') ? (float)$content : (int)$content;
+                    }
+
+                    return $content;
+                }
+
+                if (!$asString) {
+                    return $value;
                 }
 
                 if ($inAttr) {
@@ -89,10 +109,12 @@ class PHPX implements IPHPX
             })(),
 
             $value instanceof DateTime || $value instanceof DateTimeImmutable =>
-            json_encode($value->format('c'), $flags),
+            $asString ? json_encode($value->format('c'), $flags) : $value->format('c'),
 
-            default => json_encode($value, $flags) ?: '{null}',
+            default => $asString ? (json_encode($value, $flags) ?: 'null') : $value,
         };
+
+        return $processedValue;
     }
 
     /**
