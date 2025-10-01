@@ -500,22 +500,20 @@ class TemplateCompiler
                 $child->setAttribute(self::COMPONENT_ATTRIBUTE, $sectionId);
 
                 foreach ($regularProps as $propName => $propValue) {
-                    $kebabName = self::camelToKebab($propName);
+                    $attrName = self::containsMustacheSyntax($propValue)
+                        ? self::camelToKebab($propName)
+                        : $propName;
 
                     if (
                         $child->hasAttribute($propName) ||
-                        $child->hasAttribute($kebabName) ||
+                        $child->hasAttribute(self::camelToKebab($propName)) ||
                         isset($existingAttributes[$propName]) ||
-                        isset($existingAttributes[$kebabName])
+                        isset($existingAttributes[self::camelToKebab($propName)])
                     ) {
                         continue;
                     }
 
-                    if (self::containsMustacheSyntax($propValue)) {
-                        $child->setAttribute($kebabName, $propValue);
-                    } else {
-                        $child->setAttribute($kebabName, $propValue);
-                    }
+                    $child->setAttribute($attrName, $propValue);
                 }
 
                 if (!empty($parentContext)) {
@@ -569,20 +567,23 @@ class TemplateCompiler
         $allElements = $xpath->query('//*');
 
         foreach ($allElements as $element) {
-            if (!($element instanceof DOMElement)) {
-                continue;
-            }
+            if (!($element instanceof DOMElement)) continue;
 
             $attributesToRename = [];
 
             foreach ($element->attributes as $attr) {
                 $attrName = $attr->name;
-                $kebabName = self::camelToKebab($attrName);
+                $value = $attr->value;
 
+                if (!self::containsMustacheSyntax($value)) {
+                    continue;
+                }
+
+                $kebabName = self::camelToKebab($attrName);
                 if ($kebabName !== $attrName) {
                     $attributesToRename[$attrName] = [
                         'kebabName' => $kebabName,
-                        'value' => $attr->value
+                        'value' => $value
                     ];
                 }
             }
@@ -874,7 +875,9 @@ class TemplateCompiler
                     continue;
                 }
 
-                $htmlAttrName = $isComponent ? self::camelToKebab($name) : $name;
+                $htmlAttrName = $isComponent && self::containsMustacheSyntax($value)
+                    ? self::camelToKebab($name)
+                    : $name;
 
                 $pairs[] = sprintf(
                     '%s="%s"',

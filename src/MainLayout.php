@@ -19,7 +19,6 @@ class MainLayout
     /** @var Set<string>|null */
     private static ?Set $footerScripts = null;
     private static array $customMetadata = [];
-
     private static array $processedScripts = [];
 
     private const SYSTEM_PROPS = [
@@ -161,12 +160,6 @@ class MainLayout
         return implode("\n", $processed);
     }
 
-    /**
-     * Parses script tag attributes into an associative array.
-     *
-     * @param string $attrString The attributes string from the script tag.
-     * @return array The parsed attributes.
-     */
     private static function parseScriptAttributes(string $attrString): array
     {
         $attributes = [];
@@ -192,30 +185,32 @@ class MainLayout
         return $attributes;
     }
 
-    /**
-     * Converts camelCase attribute names to kebab-case for component attributes.
-     *
-     * @param array $attributes The attributes array.
-     * @return array The converted attributes.
-     */
     private static function convertAttributesToKebabCase(array $attributes): array
     {
         $converted = [];
 
         foreach ($attributes as $name => $value) {
-            $kebabName = self::camelToKebab($name);
-            $converted[$kebabName] = $value;
+            if (isset(self::SYSTEM_PROPS[$name])) {
+                $converted[$name] = $value;
+                continue;
+            }
+
+            if (self::containsMustacheSyntax((string)$value)) {
+                $kebabName = self::camelToKebab($name);
+                $converted[$kebabName] = $value;
+            } else {
+                $converted[$name] = $value;
+            }
         }
 
         return $converted;
     }
 
-    /**
-     * Converts camelCase string to kebab-case.
-     *
-     * @param string $string The string to convert.
-     * @return string The kebab-case string.
-     */
+    private static function containsMustacheSyntax(string $value): bool
+    {
+        return str_contains($value, '{') && str_contains($value, '}');
+    }
+
     private static function camelToKebab(string $string): string
     {
         if (isset(self::SYSTEM_PROPS[$string]) || str_contains($string, '-')) {
@@ -225,12 +220,6 @@ class MainLayout
         return strtolower(preg_replace('/([a-z])([A-Z])/', '$1-$2', $string));
     }
 
-    /**
-     * Builds an attributes string from an associative array.
-     *
-     * @param array $attributes The attributes array.
-     * @return string The attributes string.
-     */
     private static function buildAttributesString(array $attributes): string
     {
         if (empty($attributes)) {
