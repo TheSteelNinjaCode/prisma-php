@@ -50,8 +50,10 @@ class TemplateCompiler
     private const SYSTEM_PROPS = [
         'children' => true,
         'key' => true,
-        'ref' => true,
+        'pp-component' => true,
         'pp-context' => true,
+        'pp-for' => true,
+        'pp-ref' => true,
     ];
 
     private const SELF_CLOSING_TAGS = [
@@ -658,8 +660,18 @@ class TemplateCompiler
         return $existingAttributes;
     }
 
-    private static function containsMustacheSyntax(string $value): bool
+    /**
+     * Checks if a string contains mustache syntax (curly braces).
+     *
+     * @param mixed $value The value to check.
+     * @return bool True if the value contains mustache syntax, false otherwise.
+     */
+    public static function containsMustacheSyntax(mixed $value): bool
     {
+        if (!is_string($value)) {
+            return false;
+        }
+
         return str_contains($value, '{') && str_contains($value, '}');
     }
 
@@ -893,13 +905,32 @@ class TemplateCompiler
             : "<{$tag}{$attrStr}>{$children}</{$tag}>";
     }
 
-    private static function camelToKebab(string $string): string
+    /**
+     * Converts camelCase string to kebab-case.
+     *
+     * @param string $string The camelCase string to convert.
+     * @param array $systemProps Optional array of system properties to exclude from conversion.
+     * @return string The converted kebab-case string.
+     */
+    public static function camelToKebab(string $string, array $systemProps = []): string
     {
-        if (isset(self::SYSTEM_PROPS[$string]) || str_contains($string, '-')) {
+        $systemProps = $systemProps ?: self::SYSTEM_PROPS;
+
+        if (isset($systemProps[$string]) || str_contains($string, '-')) {
             return $string;
         }
 
         return strtolower(preg_replace('/([a-z])([A-Z])/', '$1-$2', $string));
+    }
+
+    /**
+     * Gets the default system properties.
+     *
+     * @return array The system properties array.
+     */
+    public static function getSystemProps(): array
+    {
+        return self::SYSTEM_PROPS;
     }
 
     protected static function initializeClassMappings(): void

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace PP;
 
 use PP\Set;
+use PP\PHPX\TemplateCompiler;
 
 class MainLayout
 {
@@ -20,15 +21,6 @@ class MainLayout
     private static ?Set $footerScripts = null;
     private static array $customMetadata = [];
     private static array $processedScripts = [];
-
-    private const SYSTEM_PROPS = [
-        'children' => true,
-        'key' => true,
-        'ref' => true,
-        'pp-context' => true,
-        'pp-component' => true,
-        'type' => true,
-    ];
 
     public static function init(): void
     {
@@ -188,15 +180,16 @@ class MainLayout
     private static function convertAttributesToKebabCase(array $attributes): array
     {
         $converted = [];
+        $systemProps = TemplateCompiler::getSystemProps();
 
         foreach ($attributes as $name => $value) {
-            if (isset(self::SYSTEM_PROPS[$name])) {
+            if (isset($systemProps[$name])) {
                 $converted[$name] = $value;
                 continue;
             }
 
-            if (self::containsMustacheSyntax((string)$value)) {
-                $kebabName = self::camelToKebab($name);
+            if (TemplateCompiler::containsMustacheSyntax((string)$value)) {
+                $kebabName = TemplateCompiler::camelToKebab($name, $systemProps);
                 $converted[$kebabName] = $value;
             } else {
                 $converted[$name] = $value;
@@ -204,20 +197,6 @@ class MainLayout
         }
 
         return $converted;
-    }
-
-    private static function containsMustacheSyntax(string $value): bool
-    {
-        return str_contains($value, '{') && str_contains($value, '}');
-    }
-
-    private static function camelToKebab(string $string): string
-    {
-        if (isset(self::SYSTEM_PROPS[$string]) || str_contains($string, '-')) {
-            return $string;
-        }
-
-        return strtolower(preg_replace('/([a-z])([A-Z])/', '$1-$2', $string));
     }
 
     private static function buildAttributesString(array $attributes): string

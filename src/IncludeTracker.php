@@ -70,8 +70,8 @@ class IncludeTracker
 
         $attributes = [];
         foreach ($props as $key => $value) {
-            if (self::containsMustache($value)) {
-                $key = self::camelToKebab($key);
+            if (TemplateCompiler::containsMustacheSyntax($value)) {
+                $key = TemplateCompiler::camelToKebab($key);
             }
 
             $escapedValue = htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
@@ -79,18 +79,5 @@ class IncludeTracker
         }
 
         return ' ' . implode(' ', $attributes);
-    }
-
-    private static function containsMustache(mixed $value): bool
-    {
-        if (!is_string($value)) {
-            return false;
-        }
-        return (bool) preg_match('/\{.+\}/', $value);
-    }
-
-    private static function camelToKebab(string $string): string
-    {
-        return strtolower(preg_replace('/([a-z])([A-Z])/', '$1-$2', $string));
     }
 }
