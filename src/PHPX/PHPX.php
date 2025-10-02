@@ -139,11 +139,15 @@ class PHPX implements IPHPX
 
         $expr = [];
         foreach ($all as &$chunk) {
-            $chunk = preg_replace_callback('/\{\{[\s\S]*?\}\}/', function ($m) use (&$expr) {
-                $token = '__EXPR' . count($expr) . '__';
-                $expr[$token] = $m[0];
-                return $token;
-            }, $chunk);
+            $chunk = preg_replace_callback(
+                '/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}/',
+                function ($m) use (&$expr) {
+                    $token = '__EXPR' . count($expr) . '__';
+                    $expr[$token] = $m[0];
+                    return $token;
+                },
+                $chunk
+            );
         }
         unset($chunk);
 
