@@ -53,6 +53,7 @@ class TemplateCompiler
         'pp-component' => true,
         'pp-context' => true,
         'pp-for' => true,
+        'pp-spread' => true,
         'pp-ref' => true,
     ];
 
