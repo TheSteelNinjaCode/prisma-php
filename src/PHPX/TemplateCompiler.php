@@ -519,7 +519,8 @@ class TemplateCompiler
                     $child->setAttribute($attrName, $propValue);
                 }
 
-                if (!empty($parentContext)) {
+                $hasRegularProps = !empty($regularProps);
+                if (!empty($parentContext) && ($hasRegularProps || $hasEventListeners)) {
                     $child->setAttribute(self::CONTEXT_ATTRIBUTE, $parentContext);
                 }
 
