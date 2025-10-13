@@ -715,8 +715,7 @@ class TemplateCompiler
 
     private static function needsRecompilation(string $html): bool
     {
-        return str_contains($html, '{{') ||
-            preg_match(self::COMPONENT_TAG_REGEX, $html) === 1 ||
+        return preg_match(self::COMPONENT_TAG_REGEX, $html) === 1 ||
             stripos($html, '<script') !== false;
     }
 
