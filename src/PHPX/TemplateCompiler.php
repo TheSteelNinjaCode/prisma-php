@@ -433,9 +433,30 @@ class TemplateCompiler
         try {
             $instance = self::initializeComponentInstance($mapping, $incomingProps);
 
-            $instance->children = self::getChildrenWithContextInheritance($node, $parentContext, $sectionId);
+            $reflection = self::getClassReflection($mapping['className']);
+            $hasPublicChildren = false;
 
-            return self::compileComponentHtml($instance->render(), $sectionId, $incomingProps, $parentContext);
+            foreach ($reflection['properties'] as $prop) {
+                if ($prop->getName() === 'children' && $prop->isPublic()) {
+                    $hasPublicChildren = true;
+                    break;
+                }
+            }
+
+            if ($hasPublicChildren) {
+                $instance->children = self::getChildrenWithContextInheritance(
+                    $node,
+                    $parentContext,
+                    $sectionId
+                );
+            }
+
+            return self::compileComponentHtml(
+                $instance->render(),
+                $sectionId,
+                $incomingProps,
+                $parentContext
+            );
         } finally {
             self::$sectionStack = $originalStack;
             self::$contextStack = $originalContextStack;
