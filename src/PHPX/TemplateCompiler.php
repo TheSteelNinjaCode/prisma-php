@@ -510,12 +510,33 @@ class TemplateCompiler
 
         try {
             $output = [];
+
+            $hasChildren = false;
+            foreach ($node->childNodes as $child) {
+                if (
+                    $child instanceof DOMElement ||
+                    ($child instanceof DOMText && trim($child->textContent) !== '')
+                ) {
+                    $hasChildren = true;
+                    break;
+                }
+            }
+
+            if ($hasChildren) {
+                $output[] = "<!--pp-slot-context:{$parentContext}-->";
+            }
+
             foreach ($node->childNodes as $child) {
                 if ($child instanceof DOMElement) {
                     self::applyContextToElementTree($child, $parentContext);
                 }
                 $output[] = self::processNode($child);
             }
+
+            if ($hasChildren) {
+                $output[] = "<!--/pp-slot-context-->";
+            }
+
             return trim(implode('', $output));
         } finally {
             self::$contextStack = $originalContextStack;
