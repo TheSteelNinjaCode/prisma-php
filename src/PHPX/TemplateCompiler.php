@@ -417,6 +417,9 @@ class TemplateCompiler
         array $incomingProps
     ): string {
         $mapping = self::selectComponentMapping($componentName);
+
+        self::validateComponentChildren($mapping['className'], $node);
+
         $sectionId = self::generateSectionId($mapping['className']);
 
         $originalStack = self::$sectionStack;
@@ -436,6 +439,45 @@ class TemplateCompiler
         } finally {
             self::$sectionStack = $originalStack;
             self::$contextStack = $originalContextStack;
+        }
+    }
+
+    private static function validateComponentChildren(
+        string $className,
+        DOMElement $node
+    ): void {
+        $hasChildren = false;
+        foreach ($node->childNodes as $child) {
+            if ($child instanceof DOMElement) {
+                $hasChildren = true;
+                break;
+            }
+            if ($child instanceof DOMText && trim($child->textContent) !== '') {
+                $hasChildren = true;
+                break;
+            }
+        }
+
+        if (!$hasChildren) {
+            return;
+        }
+
+        $reflection = self::getClassReflection($className);
+
+        $hasChildrenProp = false;
+        foreach ($reflection['properties'] as $prop) {
+            if ($prop->getName() === 'children') {
+                $hasChildrenProp = true;
+                break;
+            }
+        }
+
+        if (!$hasChildrenProp) {
+            throw new ComponentValidationException(
+                'children',
+                $className,
+                array_map(static fn($p) => $p->getName(), $reflection['properties'])
+            );
         }
     }
 

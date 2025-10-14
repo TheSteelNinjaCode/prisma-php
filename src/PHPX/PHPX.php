@@ -19,11 +19,6 @@ class PHPX implements IPHPX
     protected array $props;
 
     /**
-     * @var mixed The children elements or content to be rendered within the component.
-     */
-    public mixed $children;
-
-    /**
      * @var array<string, mixed> The array representation of the HTML attributes.
      */
     protected array $attributesArray = [];
@@ -36,7 +31,6 @@ class PHPX implements IPHPX
     public function __construct(array $props = [])
     {
         $this->props = $props;
-        $this->children = $props['children'] ?? '';
     }
 
     /**
@@ -230,7 +224,7 @@ class PHPX implements IPHPX
         $class = $this->getMergeClasses();
 
         return <<<HTML
-        <div class="{$class}" {$attributes}>{$this->children}</div>
+        <div class="{$class}" {$attributes}></div>
         HTML;
     }
 
