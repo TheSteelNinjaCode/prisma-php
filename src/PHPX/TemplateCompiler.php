@@ -28,7 +28,6 @@ class TemplateCompiler
     private const COMPONENT_TAG_REGEX = '/<\/*[A-Z][\w-]*/u';
     private const SELF_CLOSING_REGEX = '/<([a-z0-9-]+)([^>]*)\/>/i';
     private const SCRIPT_REGEX = '#<script\b([^>]*?)>(.*?)</script>#is';
-    private const CONTEXT_ATTRIBUTE = 'pp-context';
     private const COMPONENT_ATTRIBUTE = 'pp-component';
     private const HEAD_PATTERNS = [
         'open' => '/(<head\b[^>]*>)/i',
@@ -51,7 +50,6 @@ class TemplateCompiler
         'children' => true,
         'key' => true,
         'pp-component' => true,
-        'pp-context' => true,
         'pp-for' => true,
         'pp-spread' => true,
         'pp-ref' => true,
@@ -153,15 +151,37 @@ class TemplateCompiler
         return self::escapeAttributeAngles(
             self::escapeLiteralTextContent(
                 self::escapeAmpersands(
-                    self::normalizeNamedEntities(
-                        self::escapeMustacheOperators(
-                            self::protectInlineScripts($content)
+                    self::protectCurlyNumericEntities(
+                        self::normalizeNamedEntities(
+                            self::escapeMustacheOperators(
+                                self::protectInlineScripts($content)
+                            )
                         )
                     )
                 )
             )
         );
     }
+
+    private static function protectCurlyNumericEntities(string $html): string
+    {
+        return preg_replace_callback(
+            '/&#(x?[0-9A-Fa-f]+);/i',
+            static function (array $m): string {
+                $num = $m[1];
+                $codepoint = (strtolower($num[0] ?? '') === 'x')
+                    ? hexdec(substr($num, 1))
+                    : intval($num, 10);
+
+                if ($codepoint === 123 || $codepoint === 125) {
+                    return '&amp;#' . $num . ';';
+                }
+                return $m[0];
+            },
+            $html
+        ) ?? $html;
+    }
+
 
     private static function escapeMustacheOperators(string $content): string
     {
@@ -502,8 +522,11 @@ class TemplateCompiler
         }
     }
 
-    private static function getChildrenWithContextInheritance(DOMElement $node, string $parentContext, string $componentId): string
-    {
+    private static function getChildrenWithContextInheritance(
+        DOMElement $node,
+        string $parentContext,
+        string $componentId
+    ): string {
         $originalContextStack = self::$contextStack;
 
         self::$contextStack = [$parentContext];
@@ -523,41 +546,20 @@ class TemplateCompiler
             }
 
             if ($hasChildren) {
-                $output[] = "<!--pp-slot-context:{$parentContext}-->";
+                $output[] = "<!-- pp-scope:{$parentContext} -->";
             }
 
             foreach ($node->childNodes as $child) {
-                if ($child instanceof DOMElement) {
-                    self::applyContextToElementTree($child, $parentContext);
-                }
                 $output[] = self::processNode($child);
             }
 
             if ($hasChildren) {
-                $output[] = "<!--/pp-slot-context-->";
+                $output[] = "<!-- /pp-scope -->";
             }
 
             return trim(implode('', $output));
         } finally {
             self::$contextStack = $originalContextStack;
-        }
-    }
-
-    private static function applyContextToElementTree(DOMElement $element, string $context): void
-    {
-        if (
-            !$element->hasAttribute(self::CONTEXT_ATTRIBUTE) &&
-            !isset(self::$classMappings[$element->nodeName])
-        ) {
-            $element->setAttribute(self::CONTEXT_ATTRIBUTE, $context);
-        }
-
-        foreach ($element->childNodes as $child) {
-            if ($child instanceof DOMElement) {
-                if (!isset(self::$classMappings[$child->nodeName])) {
-                    self::applyContextToElementTree($child, $context);
-                }
-            }
         }
     }
 
@@ -570,8 +572,12 @@ class TemplateCompiler
         return $idx === 0 ? $baseId : "{$baseId}{$idx}";
     }
 
-    private static function compileComponentHtml(string $html, string $sectionId, array $incomingProps = [], string $parentContext = ''): string
-    {
+    private static function compileComponentHtml(
+        string $html,
+        string $sectionId,
+        array $incomingProps = [],
+        string $parentContext = ''
+    ): string {
         $html = self::preprocessFragmentSyntax($html);
         $fragDom = self::convertToXml($html);
 
@@ -582,8 +588,12 @@ class TemplateCompiler
         $regularProps = self::getRegularProps($incomingProps);
         $existingAttributes = self::getAllExistingAttributes($fragDom);
 
+        $needsScope = false;
+        $rootElement = null;
+
         foreach ($fragDom->documentElement->childNodes as $child) {
             if ($child instanceof DOMElement) {
+                $rootElement = $child;
                 $child->setAttribute(self::COMPONENT_ATTRIBUTE, $sectionId);
 
                 foreach ($regularProps as $propName => $propValue) {
@@ -605,7 +615,7 @@ class TemplateCompiler
 
                 $hasRegularProps = !empty($regularProps);
                 if (!empty($parentContext) && ($hasRegularProps || $hasEventListeners)) {
-                    $child->setAttribute(self::CONTEXT_ATTRIBUTE, $parentContext);
+                    $needsScope = true;
                 }
 
                 if ($hasEventListeners) {
@@ -636,10 +646,20 @@ class TemplateCompiler
         }
 
         if ($hasEventListeners && !empty($parentContext)) {
-            self::applyParentContextToEventElements($fragDom, $eventListeners, $parentContext, $sectionId);
+            self::wrapEventElementsWithScope(
+                $fragDom,
+                $eventListeners,
+                $parentContext,
+                $sectionId
+            );
         }
 
         $htmlOut = self::innerXml($fragDom);
+
+        if ($needsScope && $rootElement && !empty($parentContext)) {
+            $htmlOut = "<!-- pp-scope:{$parentContext} -->\n{$htmlOut}\n<!-- /pp-scope -->";
+        }
+
         $htmlOut = self::normalizeSelfClosingTags($htmlOut);
 
         if (self::needsRecompilation($htmlOut)) {
@@ -649,41 +669,7 @@ class TemplateCompiler
         return $htmlOut;
     }
 
-    private static function normalizeComponentAttributes(DOMDocument $dom): void
-    {
-        $xpath = new DOMXPath($dom);
-        $allElements = $xpath->query('//*');
-
-        foreach ($allElements as $element) {
-            if (!($element instanceof DOMElement)) continue;
-
-            $attributesToRename = [];
-
-            foreach ($element->attributes as $attr) {
-                $attrName = $attr->name;
-                $value = $attr->value;
-
-                if (!self::containsMustacheSyntax($value)) {
-                    continue;
-                }
-
-                $kebabName = self::camelToKebab($attrName);
-                if ($kebabName !== $attrName) {
-                    $attributesToRename[$attrName] = [
-                        'kebabName' => $kebabName,
-                        'value' => $value
-                    ];
-                }
-            }
-
-            foreach ($attributesToRename as $oldName => $info) {
-                $element->removeAttribute($oldName);
-                $element->setAttribute($info['kebabName'], $info['value']);
-            }
-        }
-    }
-
-    private static function applyParentContextToEventElements(
+    private static function wrapEventElementsWithScope(
         DOMDocument $fragDom,
         array $eventListeners,
         string $parentContext,
@@ -721,9 +707,52 @@ class TemplateCompiler
                     }
 
                     if ($hasParentEvent) {
-                        $element->setAttribute(self::CONTEXT_ATTRIBUTE, $parentContext);
+                        $parent = $element->parentNode;
+                        $openComment = $element->ownerDocument->createComment(" pp-scope:{$parentContext} ");
+                        $parent->insertBefore($openComment, $element);
+                        $closeComment = $element->ownerDocument->createComment(" /pp-scope ");
+                        $nextSibling = $element->nextSibling;
+                        if ($nextSibling) {
+                            $parent->insertBefore($closeComment, $nextSibling);
+                        } else {
+                            $parent->appendChild($closeComment);
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    private static function normalizeComponentAttributes(DOMDocument $dom): void
+    {
+        $xpath = new DOMXPath($dom);
+        $allElements = $xpath->query('//*');
+
+        foreach ($allElements as $element) {
+            if (!($element instanceof DOMElement)) continue;
+
+            $attributesToRename = [];
+
+            foreach ($element->attributes as $attr) {
+                $attrName = $attr->name;
+                $value = $attr->value;
+
+                if (!self::containsMustacheSyntax($value)) {
+                    continue;
+                }
+
+                $kebabName = self::camelToKebab($attrName);
+                if ($kebabName !== $attrName) {
+                    $attributesToRename[$attrName] = [
+                        'kebabName' => $kebabName,
+                        'value' => $value
+                    ];
+                }
+            }
+
+            foreach ($attributesToRename as $oldName => $info) {
+                $element->removeAttribute($oldName);
+                $element->setAttribute($info['kebabName'], $info['value']);
             }
         }
     }
@@ -968,7 +997,7 @@ class TemplateCompiler
         } else {
             $pairs = [];
             foreach ($attrs as $name => $value) {
-                if ($value === '' && !in_array($name, ['value', 'class', self::CONTEXT_ATTRIBUTE], true)) {
+                if ($value === '' && !in_array($name, ['value', 'class'], true)) {
                     continue;
                 }
 
