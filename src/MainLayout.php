@@ -162,7 +162,7 @@ class MainLayout
         }
 
         preg_match_all(
-            '/(\w[\w:-]*)\s*(?:=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+)))?/i',
+            "/(\w[\w:-]*)\s*(?:=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+)))?/i",
             $attrString,
             $matches,
             PREG_SET_ORDER
@@ -170,7 +170,17 @@ class MainLayout
 
         foreach ($matches as $match) {
             $name = $match[1];
-            $value = $match[2] ?? $match[3] ?? $match[4] ?? '';
+
+            if (isset($match[2]) && $match[2] !== '') {
+                $value = $match[2];
+            } elseif (isset($match[3]) && $match[3] !== '') {
+                $value = $match[3];
+            } elseif (isset($match[4]) && $match[4] !== '') {
+                $value = $match[4];
+            } else {
+                $value = '';
+            }
+
             $attributes[$name] = $value;
         }
 

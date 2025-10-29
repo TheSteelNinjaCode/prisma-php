@@ -12,13 +12,6 @@ use PP\PrismaPHPSettings;
 class Request
 {
     /**
-     * The base URL for the application.
-     * 
-     * @var string
-     */
-    public const baseUrl = '/src/app';
-
-    /**
      * @var stdClass $params A static property to hold request parameters.
      * 
      * This property is used to hold request parameters that are passed to the request.
