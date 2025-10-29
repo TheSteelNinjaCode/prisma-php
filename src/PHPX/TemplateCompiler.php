@@ -942,13 +942,29 @@ class TemplateCompiler
             return $mappings;
         }
 
-        $srcNorm = str_replace('\\', '/', SRC_PATH) . '/';
-        $relImp = str_replace($srcNorm, '', str_replace('\\', '/', Bootstrap::$contentToInclude));
+        $currentFile = str_replace('\\', '/', Bootstrap::$contentToInclude);
 
         foreach ($mappings as $entry) {
             if (isset($entry['importer'])) {
-                $imp = str_replace([$srcNorm, '\\'], ['', '/'], $entry['importer']);
-                if ($imp === $relImp) {
+                $importerPath = str_replace('\\', '/', $entry['importer']);
+
+                if ($importerPath === $currentFile) {
+                    return $entry;
+                }
+            }
+        }
+
+        $srcNorm = str_replace('\\', '/', SRC_PATH);
+        $currentRelative = str_replace($srcNorm, '', $currentFile);
+        $currentRelative = ltrim($currentRelative, '/');
+
+        foreach ($mappings as $entry) {
+            if (isset($entry['importer'])) {
+                $importerPath = str_replace('\\', '/', $entry['importer']);
+                $importerRelative = str_replace($srcNorm, '', $importerPath);
+                $importerRelative = ltrim($importerRelative, '/');
+
+                if ($importerRelative === $currentRelative) {
                     return $entry;
                 }
             }
