@@ -438,6 +438,7 @@ class TemplateCompiler
     ): string {
         $mapping = self::selectComponentMapping($componentName);
 
+        self::ensureClassLoaded($mapping['className'], $mapping['filePath']);
         self::validateComponentChildren($mapping['className'], $node);
 
         $sectionId = self::generateSectionId($mapping['className']);
@@ -874,6 +875,13 @@ class TemplateCompiler
     private static function getClassReflection(string $className): array
     {
         if (!isset(self::$reflectionCache[$className])) {
+            if (!class_exists($className, false)) {
+                throw new RuntimeException(
+                    "Cannot get reflection for class '{$className}' - class not loaded. " .
+                        "This is likely a bug in the template compiler."
+                );
+            }
+
             $rc = new ReflectionClass($className);
             $publicProps = array_filter(
                 $rc->getProperties(ReflectionProperty::IS_PUBLIC),
