@@ -20,14 +20,12 @@ use ReflectionNamedType;
 use PP\PHPX\TypeCoercer;
 use PP\PHPX\Exceptions\ComponentValidationException;
 use DOMXPath;
+use InvalidArgumentException;
 
 class TemplateCompiler
 {
-    private const ATTRIBUTE_REGEX = '/(\s[\w:-]+=)([\'"])(.*?)\2/s';
-    private const NAMED_ENTITY_REGEX = '/&([a-zA-Z][a-zA-Z0-9]+);/';
     private const COMPONENT_TAG_REGEX = '/<\/*[A-Z][\w-]*/u';
     private const SELF_CLOSING_REGEX = '/<([a-z0-9-]+)([^>]*)\/>/i';
-    private const SCRIPT_REGEX = '#<script\b([^>]*?)>(.*?)</script>#is';
     private const COMPONENT_ATTRIBUTE = 'pp-component';
     private const HEAD_PATTERNS = [
         'open' => '/(<head\b[^>]*>)/i',
@@ -37,7 +35,6 @@ class TemplateCompiler
         'open' => '/<body([^>]*)>/i',
         'close' => '/(<\/body\s*>)/i',
     ];
-
     private const LITERAL_TEXT_TAGS = [
         'code' => true,
         'pre' => true,
@@ -45,7 +42,6 @@ class TemplateCompiler
         'kbd' => true,
         'var' => true,
     ];
-
     private const SYSTEM_PROPS = [
         'children' => true,
         'key' => true,
@@ -54,7 +50,6 @@ class TemplateCompiler
         'pp-spread' => true,
         'pp-ref' => true,
     ];
-
     private const SELF_CLOSING_TAGS = [
         'area' => true,
         'base' => true,
@@ -73,7 +68,6 @@ class TemplateCompiler
         'track' => true,
         'wbr' => true,
     ];
-
     private const SCRIPT_TYPES = [
         '' => true,
         'text/javascript' => true,
@@ -88,8 +82,43 @@ class TemplateCompiler
     private static int $compileDepth = 0;
     private static array $componentInstanceCounts = [];
     private static array $contextStack = [];
+    private static array $compiledCache = [];
+    private static bool $cacheEnabled = true;
+    private static ?DOMDocument $reusableDom = null;
+    private static array $compiledPatterns = [];
+    private static int $maxCacheSize = 100;
+    private static array $cacheStats = [];
 
     public static function compile(string $templateContent): string
+    {
+        if (!self::$cacheEnabled) {
+            return self::compileInternal($templateContent);
+        }
+
+        $hash = md5($templateContent);
+
+        if (isset(self::$compiledCache[$hash])) {
+            self::$cacheStats[$hash]['hits']++;
+            return self::$compiledCache[$hash];
+        }
+
+        if (count(self::$compiledCache) >= self::$maxCacheSize) {
+            $leastUsed = array_search(
+                min(array_column(self::$cacheStats, 'hits')),
+                array_column(self::$cacheStats, 'hits')
+            );
+            unset(self::$compiledCache[$leastUsed]);
+            unset(self::$cacheStats[$leastUsed]);
+        }
+
+        $compiled = self::compileInternal($templateContent);
+        self::$compiledCache[$hash] = $compiled;
+        self::$cacheStats[$hash] = ['hits' => 0, 'created' => time()];
+
+        return $compiled;
+    }
+
+    private static function compileInternal(string $templateContent): string
     {
         if (self::$compileDepth === 0) {
             self::$componentInstanceCounts = [];
@@ -129,7 +158,7 @@ class TemplateCompiler
         ) {
             $htmlContent = preg_replace(
                 self::BODY_PATTERNS['open'],
-                '<body$1 hidden>',
+                '<body$1 style="opacity:0;pointer-events:none;user-select:none;transition:opacity .18s ease-out;">',
                 $htmlContent,
                 1
             );
@@ -165,17 +194,24 @@ class TemplateCompiler
 
     private static function protectCurlyNumericEntities(string $html): string
     {
+        if (!str_contains($html, '&#')) {
+            return $html;
+        }
+
         return preg_replace_callback(
-            '/&#(x?[0-9A-Fa-f]+);/i',
+            self::getPattern('numeric_entity'),
             static function (array $m): string {
                 $num = $m[1];
-                $codepoint = (strtolower($num[0] ?? '') === 'x')
+
+                $isHex = ($num[0] === 'x' || $num[0] === 'X');
+                $codepoint = $isHex
                     ? hexdec(substr($num, 1))
-                    : intval($num, 10);
+                    : (int)$num;
 
                 if ($codepoint === 123 || $codepoint === 125) {
                     return '&amp;#' . $num . ';';
                 }
+
                 return $m[0];
             },
             $html
@@ -185,12 +221,19 @@ class TemplateCompiler
 
     private static function escapeMustacheOperators(string $content): string
     {
+        if (!str_contains($content, '{')) {
+            return $content;
+        }
+
         return preg_replace_callback(
-            '/\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/',
-            static function ($matches) {
-                $expression = $matches[1];
-                $escapedExpression = str_replace(['<', '>'], ['&lt;', '&gt;'], $expression);
-                return '{' . $escapedExpression . '}';
+            self::getPattern('mustache'),
+            static function (array $matches): string {
+                if (!str_contains($matches[1], '<') && !str_contains($matches[1], '>')) {
+                    return $matches[0];
+                }
+
+                $expression = str_replace(['<', '>'], ['&lt;', '&gt;'], $matches[1]);
+                return '{' . $expression . '}';
             },
             $content
         );
@@ -198,10 +241,14 @@ class TemplateCompiler
 
     private static function createDomFromXml(string $xml): DOMDocument
     {
-        $dom = new DOMDocument('1.0', 'UTF-8');
+        if (self::$reusableDom === null) {
+            self::$reusableDom = new DOMDocument('1.0', 'UTF-8');
+        }
+
+        $dom = clone self::$reusableDom;
         libxml_use_internal_errors(true);
 
-        if (!$dom->loadXML($xml, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET)) {
+        if (!$dom->loadXML($xml, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET | LIBXML_COMPACT)) {
             $errors = self::getXmlErrors();
             libxml_use_internal_errors(false);
             throw new RuntimeException('XML Parsing Failed: ' . implode('; ', $errors));
@@ -222,12 +269,47 @@ class TemplateCompiler
         return $output;
     }
 
+    private static function getPattern(string $key): string
+    {
+        if (!isset(self::$compiledPatterns[$key])) {
+            self::$compiledPatterns[$key] = match ($key) {
+                // Script patterns
+                'script' => '#<script\b([^>]*?)>(.*?)</script>#is',
+                'script_src' => '/\bsrc\s*=/i',
+                'script_type' => '/\btype\s*=\s*([\'"]?)([^\'"\s>]+)/i',
+
+                // Mustache and entities
+                'mustache' => '/\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/',
+                'named_entity' => '/&([a-zA-Z][a-zA-Z0-9]+);/',
+                'numeric_entity' => '/&#(x?[0-9A-Fa-f]+);/i',
+                'unescaped_ampersand' => '/&(?![a-zA-Z][A-Za-z0-9]*;|#[0-9]+;|#x[0-9A-Fa-f]+;)/',
+
+                // Attributes and tags
+                'attribute' => '/(\s[\w:-]+=)([\'"])(.*?)\2/s',
+                'literal_text_tags' => '/(<(?:code|pre|samp|kbd|var)\b[^>]*>)(.*?)(<\/(?:code|pre|samp|kbd|var)>)/is',
+                'literal_text_operators' => '/(\s|^|,)([<>]=?)(\s|$|,)/',
+
+                // CDATA
+                'cdata_split' => '/(<!\[CDATA\[[\s\S]*?\]\]>)/',
+                'cdata_start' => '/^<!\[CDATA\[/',
+
+                default => throw new \InvalidArgumentException("Unknown pattern key: $key")
+            };
+        }
+
+        return self::$compiledPatterns[$key];
+    }
+
     private static function escapeAmpersands(string $content): string
     {
+        if (!str_contains($content, '&')) {
+            return $content;
+        }
+
         return self::processCDataAwareParts(
             $content,
-            fn($part) => preg_replace(
-                '/&(?![a-zA-Z][A-Za-z0-9]*;|#[0-9]+;|#x[0-9A-Fa-f]+;)/',
+            static fn(string $part): string => preg_replace(
+                self::getPattern('unescaped_ampersand'),
                 '&amp;',
                 $part
             )
@@ -236,29 +318,49 @@ class TemplateCompiler
 
     private static function escapeAttributeAngles(string $html): string
     {
+        if (!preg_match('/\s\w+=["\']/', $html)) {
+            return $html;
+        }
+
         return preg_replace_callback(
-            self::ATTRIBUTE_REGEX,
-            static fn($m) => $m[1] . $m[2] .
-                str_replace(['<', '>'], ['&lt;', '&gt;'], $m[3]) . $m[2],
+            self::getPattern('attribute'),
+            static function (array $m): string {
+                if (!str_contains($m[3], '<') && !str_contains($m[3], '>')) {
+                    return $m[0];
+                }
+
+                return $m[1] . $m[2] .
+                    str_replace(['<', '>'], ['&lt;', '&gt;'], $m[3]) . $m[2];
+            },
             $html
         );
     }
 
     private static function escapeLiteralTextContent(string $content): string
     {
-        $literalTags = implode('|', array_keys(self::LITERAL_TEXT_TAGS));
-        $pattern = '/(<(?:' . $literalTags . ')\b[^>]*>)(.*?)(<\/(?:' . $literalTags . ')>)/is';
+        static $quickCheck = null;
+        if ($quickCheck === null) {
+            $quickCheck = '/<(?:code|pre|samp|kbd|var)\b/i';
+        }
+
+        if (!preg_match($quickCheck, $content)) {
+            return $content;
+        }
 
         return preg_replace_callback(
-            $pattern,
-            static function ($matches) {
+            self::getPattern('literal_text_tags'),
+            static function (array $matches): string {
                 $openTag = $matches[1];
                 $textContent = $matches[2];
                 $closeTag = $matches[3];
 
+                if (!str_contains($textContent, '<') && !str_contains($textContent, '>')) {
+                    return $matches[0];
+                }
+
                 $escapedContent = preg_replace_callback(
-                    '/(\s|^|,)([<>]=?)(\s|$|,)/',
-                    function ($match) {
+                    self::getPattern('literal_text_operators'),
+                    static function (array $match): string {
                         $operator = $match[2];
                         $escapedOp = str_replace(['<', '>'], ['&lt;', '&gt;'], $operator);
                         return $match[1] . $escapedOp . $match[3];
@@ -274,18 +376,31 @@ class TemplateCompiler
 
     private static function normalizeNamedEntities(string $html): string
     {
+        if (!str_contains($html, '&')) {
+            return $html;
+        }
+
+        static $hasMbOrd = null;
+        if ($hasMbOrd === null) {
+            $hasMbOrd = function_exists('mb_ord');
+        }
+
         return self::processCDataAwareParts(
             $html,
-            static function (string $part): string {
+            static function (string $part) use ($hasMbOrd): string {
+                if (!preg_match('/&[a-zA-Z]/', $part)) {
+                    return $part;
+                }
+
                 return preg_replace_callback(
-                    self::NAMED_ENTITY_REGEX,
-                    static function (array $m): string {
+                    self::getPattern('named_entity'),
+                    static function (array $m) use ($hasMbOrd): string {
                         $decoded = html_entity_decode($m[0], ENT_HTML5, 'UTF-8');
                         if ($decoded === $m[0]) {
                             return $m[0];
                         }
 
-                        $code = function_exists('mb_ord')
+                        $code = $hasMbOrd
                             ? mb_ord($decoded, 'UTF-8')
                             : unpack('N', mb_convert_encoding($decoded, 'UCS-4BE', 'UTF-8'))[1];
 
@@ -299,13 +414,23 @@ class TemplateCompiler
 
     private static function processCDataAwareParts(string $content, callable $processor): string
     {
-        $parts = preg_split('/(<!\[CDATA\[[\s\S]*?\]\]>)/', $content, -1, PREG_SPLIT_DELIM_CAPTURE);
+        if (!str_contains($content, '<![CDATA[')) {
+            return $processor($content);
+        }
+
+        $parts = preg_split(
+            self::getPattern('cdata_split'),
+            $content,
+            -1,
+            PREG_SPLIT_DELIM_CAPTURE
+        );
+
         if ($parts === false) {
             return $content;
         }
 
         foreach ($parts as $i => $part) {
-            if (!str_starts_with($part, '<![CDATA[')) {
+            if ($part !== '' && !preg_match(self::getPattern('cdata_start'), $part)) {
                 $parts[$i] = $processor($part);
             }
         }
@@ -320,7 +445,7 @@ class TemplateCompiler
         }
 
         $callback = static function (array $m): string {
-            if (preg_match('/\bsrc\s*=/i', $m[1])) {
+            if (preg_match(self::getPattern('script_src'), $m[1])) {
                 return $m[0];
             }
 
@@ -347,7 +472,7 @@ class TemplateCompiler
 
     private static function extractScriptType(string $attributes): string
     {
-        if (preg_match('/\btype\s*=\s*([\'"]?)([^\'"\s>]+)/i', $attributes, $matches)) {
+        if (preg_match(self::getPattern('script_type'), $attributes, $matches)) {
             return strtolower($matches[2]);
         }
         return '';
@@ -355,7 +480,7 @@ class TemplateCompiler
 
     private static function processScriptsInContent(string $content, callable $callback): string
     {
-        return preg_replace_callback(self::SCRIPT_REGEX, $callback, $content) ?? $content;
+        return preg_replace_callback(self::getPattern('script'), $callback, $content) ?? $content;
     }
 
     protected static function processNode(DOMNode $node): string
@@ -987,12 +1112,12 @@ class TemplateCompiler
             $node = $node->documentElement;
         }
 
-        $html = '';
+        $parts = [];
         foreach ($node->childNodes as $child) {
-            $html .= $node->ownerDocument->saveXML($child);
+            $parts[] = $node->ownerDocument->saveXML($child);
         }
 
-        return $html;
+        return implode('', $parts);
     }
 
     private static function preprocessFragmentSyntax(string $content): string
