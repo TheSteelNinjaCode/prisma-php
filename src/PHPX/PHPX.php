@@ -10,6 +10,9 @@ use PP\PrismaPHPSettings;
 use Exception;
 use DateTime;
 use DateTimeImmutable;
+use ReflectionProperty;
+use PP\PHPX\TypeCoercer;
+use InvalidArgumentException;
 
 class PHPX implements IPHPX
 {
@@ -35,6 +38,32 @@ class PHPX implements IPHPX
      */
     public function __construct(array $props = [])
     {
+        foreach ($props as $key => $value) {
+            if (!property_exists($this, $key)) {
+                continue;
+            }
+
+            $reflection = new ReflectionProperty($this, $key);
+
+            if (!$reflection->isPublic()) {
+                continue;
+            }
+
+            try {
+                $coercedValue = TypeCoercer::coerce($value, $reflection->getType());
+                $this->$key = $coercedValue;
+            } catch (InvalidArgumentException $e) {
+                throw new InvalidArgumentException(
+                    sprintf(
+                        "Invalid value for property '%s' in %s: %s",
+                        $key,
+                        static::class,
+                        $e->getMessage()
+                    )
+                );
+            }
+        }
+
         $this->props = $props;
         $this->children = $props['children'] ?? '';
     }

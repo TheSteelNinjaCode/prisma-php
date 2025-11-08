@@ -17,7 +17,6 @@ use LibXMLError;
 use ReflectionClass;
 use ReflectionProperty;
 use ReflectionNamedType;
-use PP\PHPX\TypeCoercer;
 use PP\PHPX\Exceptions\ComponentValidationException;
 use DOMXPath;
 use InvalidArgumentException;
@@ -978,10 +977,7 @@ class TemplateCompiler
 
         self::validateComponentProps($className, $attributes);
 
-        $instance = $reflection['class']->newInstanceWithoutConstructor();
-        self::setInstanceProperties($instance, $attributes, $reflection['properties']);
-
-        $reflection['constructor']?->invoke($instance, $attributes);
+        $instance = $reflection['class']->newInstance($attributes);
 
         return $instance;
     }
@@ -1024,20 +1020,6 @@ class TemplateCompiler
         }
 
         return self::$reflectionCache[$className];
-    }
-
-    private static function setInstanceProperties(
-        object $instance,
-        array $attributes,
-        array $properties
-    ): void {
-        foreach ($properties as $prop) {
-            $name = $prop->getName();
-            if (array_key_exists($name, $attributes)) {
-                $value = TypeCoercer::coerce($attributes[$name], $prop->getType());
-                $prop->setValue($instance, $value);
-            }
-        }
     }
 
     private static function validateComponentProps(string $className, array $attributes): void
