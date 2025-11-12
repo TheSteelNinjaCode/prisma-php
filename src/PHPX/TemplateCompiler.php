@@ -555,6 +555,22 @@ class TemplateCompiler
         return $node->textContent;
     }
 
+    private static function normalizePropsForComponent(array $props): array
+    {
+        $normalized = [];
+
+        foreach ($props as $key => $value) {
+            $camelKey = str_replace('-', '', lcfirst(ucwords($key, '-')));
+            $normalized[$camelKey] = $value;
+
+            if ($key !== $camelKey) {
+                $normalized[$key] = $value;
+            }
+        }
+
+        return $normalized;
+    }
+
     protected static function renderComponent(
         DOMElement $node,
         string $componentName,
@@ -566,6 +582,7 @@ class TemplateCompiler
         self::validateComponentChildren($mapping['className'], $node);
 
         $sectionId = self::generateSectionId($mapping['className']);
+        $normalizedProps = self::normalizePropsForComponent($incomingProps);
 
         $originalStack = self::$sectionStack;
         $originalContextStack = self::$contextStack;
@@ -576,7 +593,7 @@ class TemplateCompiler
         self::$contextStack[] = $sectionId;
 
         try {
-            $instance = self::initializeComponentInstance($mapping, $incomingProps);
+            $instance = self::initializeComponentInstance($mapping, $normalizedProps);
 
             $reflection = self::getClassReflection($mapping['className']);
             $hasPublicChildren = false;
