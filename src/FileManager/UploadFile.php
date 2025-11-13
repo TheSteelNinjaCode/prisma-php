@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace PP\FileManager;
 
+use Exception;
+
 class UploadFile
 {
     protected string $destination = '';
@@ -28,15 +30,26 @@ class UploadFile
      * Constructor for the UploadFile class.
      *
      * @param string $uploadFolder The folder to which uploaded files will be moved.
-     * @throws \Exception If the upload folder is not a valid, writable folder.
+     * @throws Exception If the upload folder is not a valid, writable folder.
      */
     public function __construct(string $uploadFolder)
     {
         if (!is_dir($uploadFolder) || !is_writable($uploadFolder)) {
-            throw new \Exception("$uploadFolder must be a valid, writable folder.");
+            throw new Exception("$uploadFolder must be a valid, writable folder.");
         }
         // Ensure the folder ends with a '/'
         $this->destination = rtrim($uploadFolder, '/') . '/';
+    }
+
+    /**
+     * Sets the permitted MIME types for uploaded files.
+     *
+     * @param array $mimeTypes An array of permitted MIME types.
+     * @return void
+     */
+    public function setPermittedTypes(array $mimeTypes): void
+    {
+        $this->permittedTypes = $mimeTypes;
     }
 
     /**
@@ -49,7 +62,7 @@ class UploadFile
     {
         $serverMax = self::convertToBytes(ini_get('upload_max_filesize'));
         if ($bytes > $serverMax) {
-            throw new \Exception('Maximum size cannot exceed server limit for individual files: ' . self::convertFromBytes($serverMax));
+            throw new Exception('Maximum size cannot exceed server limit for individual files: ' . self::convertFromBytes($serverMax));
         }
         if ($bytes > 0) {
             $this->maxSize = $bytes;
@@ -110,7 +123,6 @@ class UploadFile
     {
         $this->renameDuplicates = $renameDuplicates;
         if (empty($_FILES) || !is_array(current($_FILES))) {
-            // No file was uploaded or the structure is invalid, handle this as an error
             $this->messages[] = "No files were uploaded.";
             $this->errorCode[] = UPLOAD_ERR_NO_FILE;
             return;
@@ -118,7 +130,6 @@ class UploadFile
 
         $uploaded = current($_FILES);
 
-        // Handle single and multiple file uploads using a unified approach
         $files = is_array($uploaded['name']) ? $this->rearrangeFilesArray($uploaded) : [$uploaded];
 
         foreach ($files as $file) {
@@ -137,16 +148,13 @@ class UploadFile
      */
     public function update(array $file, string $oldFilename): bool
     {
-        // First, delete the old file
         if (!$this->delete($oldFilename)) {
             $this->messages[] = "Failed to delete the old file $oldFilename. Update aborted.";
-            $this->errorCode[] = UPLOAD_ERR_CANT_WRITE; // Error code for failure to update
+            $this->errorCode[] = UPLOAD_ERR_CANT_WRITE;
             return false;
         }
 
-        // Now proceed to upload the new file with the old filename
         if ($this->checkFile($file)) {
-            // Set the new file name to match the old file's name
             $this->newName = $oldFilename;
             $this->moveFile($file);
             return true;
@@ -166,35 +174,30 @@ class UploadFile
     {
         $oldPath = $this->destination . $oldName;
 
-        // Extract the file extension from the old file
         $extension = pathinfo($oldName, PATHINFO_EXTENSION);
 
-        // Add the extension to the new name
         $newNameWithExtension = str_replace(' ', '_', $newName) . '.' . $extension;
         $newPath = $this->destination . $newNameWithExtension;
 
-        // Check if the file exists
         if (!file_exists($oldPath)) {
             $this->messages[] = "File $oldName does not exist.";
-            $this->errorCode[] = UPLOAD_ERR_NO_FILE; // Error code for file not found
+            $this->errorCode[] = UPLOAD_ERR_NO_FILE;
             return false;
         }
 
-        // Validate that the new name doesn't already exist
         if (file_exists($newPath)) {
             $this->messages[] = "A file with the name $newNameWithExtension already exists.";
-            $this->errorCode[] = UPLOAD_ERR_CANT_WRITE; // Error code for name conflict
+            $this->errorCode[] = UPLOAD_ERR_CANT_WRITE;
             return false;
         }
 
-        // Attempt to rename the file
         if (rename($oldPath, $newPath)) {
             $this->messages[] = "File $oldName renamed successfully to $newNameWithExtension";
             $this->errorCode[] = 0; // Success code
             return true;
         } else {
             $this->messages[] = "Failed to rename $oldName to $newNameWithExtension";
-            $this->errorCode[] = UPLOAD_ERR_CANT_WRITE; // Error code for rename failure
+            $this->errorCode[] = UPLOAD_ERR_CANT_WRITE;
             return false;
         }
     }
@@ -211,17 +214,17 @@ class UploadFile
 
         if (!file_exists($filePath)) {
             $this->messages[] = "File $filename does not exist.";
-            $this->errorCode[] = UPLOAD_ERR_NO_FILE; // Error code for file not found
+            $this->errorCode[] = UPLOAD_ERR_NO_FILE;
             return false;
         }
 
         if (unlink($filePath)) {
             $this->messages[] = "File $filename deleted successfully.";
-            $this->errorCode[] = 0; // Success code
+            $this->errorCode[] = 0;
             return true;
         } else {
             $this->messages[] = "Failed to delete $filename.";
-            $this->errorCode[] = UPLOAD_ERR_CANT_WRITE; // Error code for failure to delete
+            $this->errorCode[] = UPLOAD_ERR_CANT_WRITE;
             return false;
         }
     }
@@ -276,12 +279,12 @@ class UploadFile
     {
         if ($file['size'] == 0) {
             $this->messages[] = $file['name'] . ' is empty.';
-            $this->errorCode[] = UPLOAD_ERR_NO_FILE; // Log an error code for empty files
+            $this->errorCode[] = UPLOAD_ERR_NO_FILE;
             return false;
         }
         if ($file['size'] > $this->maxSize) {
             $this->messages[] = $file['name'] . ' exceeds the maximum size: ' . self::convertFromBytes($this->maxSize);
-            $this->errorCode[] = UPLOAD_ERR_INI_SIZE; // Log an error code for exceeding size
+            $this->errorCode[] = UPLOAD_ERR_INI_SIZE;
             return false;
         }
         return true;
@@ -291,28 +294,50 @@ class UploadFile
     {
         if (!in_array($file['type'], $this->permittedTypes)) {
             $this->messages[] = $file['name'] . ' is not a permitted type.';
-            $this->errorCode[] = UPLOAD_ERR_EXTENSION; // Log an error code for invalid file type
+            $this->errorCode[] = UPLOAD_ERR_EXTENSION;
             return false;
         }
         return true;
     }
 
+    protected function sanitizeFileName(string $original): string
+    {
+        $ext  = pathinfo($original, PATHINFO_EXTENSION);
+        $name = pathinfo($original, PATHINFO_FILENAME);
+        $name = iconv('UTF-8', 'ASCII//TRANSLIT', $name) ?: $name;
+        $name = str_replace(' ', '_', $name);
+        $name = preg_replace('/[^A-Za-z0-9._-]+/', '_', $name);
+
+        $name = preg_replace('/_+/', '_', $name);
+        $name = trim($name, '_');
+
+        $ext = strtolower($ext);
+
+        return $ext ? "{$name}.{$ext}" : $name;
+    }
+
     protected function checkName(array $file): void
     {
         $this->newName = '';
-        $noSpaces = str_replace(' ', '_', $file['name']);
-        if ($noSpaces != $file['name']) {
+
+        $sanitized = $this->sanitizeFileName($file['name']);
+        $noSpaces = $sanitized;
+
+        if ($noSpaces !== $file['name']) {
             $this->newName = $noSpaces;
         }
+
         $nameParts = pathinfo($noSpaces);
         $extension = $nameParts['extension'] ?? '';
+
         if (!$this->typeCheckingOn && !empty($this->suffix)) {
             if (in_array($extension, $this->notTrusted) || empty($extension)) {
                 $this->newName = $noSpaces . $this->suffix;
             }
         }
+
         if ($this->renameDuplicates) {
-            $name = isset($this->newName) ? $this->newName : $file['name'];
+            $name = $this->newName ?: $file['name'];
             $existing = scandir($this->destination);
             if (in_array($name, $existing)) {
                 $i = 1;
@@ -331,7 +356,6 @@ class UploadFile
 
     protected function moveFile(array $file): void
     {
-        // Ensure the newName is set or fallback to the original file name
         $filename = $this->newName ?: $file['name'];
         $destination = $this->destination . $filename;
         $success = move_uploaded_file($file['tmp_name'], $destination);
@@ -351,11 +375,9 @@ class UploadFile
         }
 
         $this->messages[] = $message;
-        // Add a success/error code for file move
-        $this->errorCode[] = $success ? 0 : UPLOAD_ERR_CANT_WRITE; // 0 for success, error code for failure
+        $this->errorCode[] = $success ? 0 : UPLOAD_ERR_CANT_WRITE;
     }
 
-    // Utility function to restructure the $_FILES array for multiple uploads
     protected function rearrangeFilesArray(array $files): array
     {
         $rearranged = [];
