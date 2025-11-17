@@ -151,17 +151,12 @@ class TemplateCompiler
             $htmlContent = preg_replace($pattern, $replacement, $htmlContent, 1);
         }
 
-        if (
-            !isset($_SERVER['HTTP_X_PP_NAVIGATION']) &&
-            !PrismaPHPSettings::$option->backendOnly
-        ) {
-            $htmlContent = preg_replace(
-                self::BODY_PATTERNS['open'],
-                '<body$1 style="opacity:0;pointer-events:none;user-select:none;transition:opacity .18s ease-out;">',
-                $htmlContent,
-                1
-            );
-        }
+        $htmlContent = preg_replace(
+            self::BODY_PATTERNS['open'],
+            '<body$1 style="opacity:0;pointer-events:none;user-select:none;transition:opacity .18s ease-out;">',
+            $htmlContent,
+            1
+        );
 
         return $htmlContent;
     }
