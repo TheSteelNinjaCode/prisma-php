@@ -11,159 +11,337 @@ use PP\Validator;
 class Mailer
 {
     private PHPMailer $mail;
+    private bool $messageDirty = false;
 
-    public function __construct()
+    public function __construct(?PHPMailer $mail = null)
     {
-        $this->mail = new PHPMailer(true);
+        $this->mail = $mail ?? new PHPMailer(true);
         $this->mail->CharSet = 'UTF-8';
-        $this->setup();
+
+        $this->configureTransport();
+        $this->configureDefaultFrom();
     }
 
-    private function setup(): void
+    private function configureTransport(): void
     {
         $this->mail->isSMTP();
-        $this->mail->SMTPDebug = 0;
-        $this->mail->Host = $_ENV['SMTP_HOST'];
-        $this->mail->SMTPAuth = true;
-        $this->mail->Username = $_ENV['SMTP_USERNAME'];
-        $this->mail->Password = $_ENV['SMTP_PASSWORD'];
-        $this->mail->SMTPSecure = $_ENV['SMTP_ENCRYPTION'];
-        $this->mail->Port = (int) $_ENV['SMTP_PORT'];
-        $this->mail->setFrom($_ENV['MAIL_FROM'], $_ENV['MAIL_FROM_NAME']);
+        $this->mail->SMTPDebug  = 0;
+        $this->mail->Host       = $_ENV['SMTP_HOST']       ?? '';
+        $this->mail->SMTPAuth   = true;
+        $this->mail->Username   = $_ENV['SMTP_USERNAME']   ?? '';
+        $this->mail->Password   = $_ENV['SMTP_PASSWORD']   ?? '';
+        $this->mail->SMTPSecure = $_ENV['SMTP_ENCRYPTION'] ?? PHPMailer::ENCRYPTION_STARTTLS;
+        $this->mail->Port       = (int) ($_ENV['SMTP_PORT'] ?? 587);
+    }
+
+    private function configureDefaultFrom(): void
+    {
+        $from     = $_ENV['MAIL_FROM']      ?? null;
+        $fromName = $_ENV['MAIL_FROM_NAME'] ?? '';
+
+        if ($from) {
+            $email = Validator::email($from);
+            if ($email) {
+                $this->mail->setFrom($email, Validator::string($fromName));
+            }
+        }
     }
 
     /**
-     * Send an email.
+     * Override the "from" address for this message.
      *
-     * @param string $to The recipient's email address.
-     * @param string $subject The subject of the email.
-     * @param string $body The HTML body of the email.
-     * @param array $options (optional) Additional email options like name, altBody, CC, BCC, and attachments.
-     *                       - attachments: A string or an array of file paths, or an array of associative arrays with keys 'path' and 'name'.
+     * @param string      $email Sender email.
+     * @param string|null $name  Optional sender name.
      *
-     * @return bool Returns true if the email is sent successfully, false otherwise.
+     * @return $this
      *
-     * @throws Exception Throws an exception if the email could not be sent.
+     * @throws Exception If email is invalid.
      */
-    public function send(string $to, string $subject, string $body, array $options = []): bool
+    public function from(string $email, ?string $name = null): self
+    {
+        $this->touchMessage();
+
+        $email = Validator::email($email);
+        if (!$email) {
+            throw new Exception('Invalid "from" email address');
+        }
+
+        $name = $name !== null ? Validator::string($name) : '';
+        $this->mail->setFrom($email, $name);
+
+        return $this;
+    }
+
+    /**
+     * Add a main recipient.
+     *
+     * @param string      $email Recipient email.
+     * @param string|null $name  Optional recipient name.
+     *
+     * @return $this
+     *
+     * @throws Exception If email is invalid.
+     */
+    public function to(string $email, ?string $name = null): self
+    {
+        $this->touchMessage();
+
+        $email = Validator::email($email);
+        if (!$email) {
+            throw new Exception('Invalid "to" email address');
+        }
+
+        $name = $name !== null ? Validator::string($name) : '';
+        $this->mail->addAddress($email, $name);
+
+        return $this;
+    }
+
+    /**
+     * Add a CC recipient.
+     *
+     * @param string      $email CC email.
+     * @param string|null $name  Optional CC name.
+     *
+     * @return $this
+     *
+     * @throws Exception If email is invalid.
+     */
+    public function cc(string $email, ?string $name = null): self
+    {
+        $this->touchMessage();
+
+        $email = Validator::email($email);
+        if (!$email) {
+            throw new Exception('Invalid "cc" email address');
+        }
+
+        $name = $name !== null ? Validator::string($name) : '';
+        $this->mail->addCC($email, $name);
+
+        return $this;
+    }
+
+    /**
+     * Add a BCC recipient.
+     *
+     * @param string      $email BCC email.
+     * @param string|null $name  Optional BCC name.
+     *
+     * @return $this
+     *
+     * @throws Exception If email is invalid.
+     */
+    public function bcc(string $email, ?string $name = null): self
+    {
+        $this->touchMessage();
+
+        $email = Validator::email($email);
+        if (!$email) {
+            throw new Exception('Invalid "bcc" email address');
+        }
+
+        $name = $name !== null ? Validator::string($name) : '';
+        $this->mail->addBCC($email, $name);
+
+        return $this;
+    }
+
+    /**
+     * Set Reply-To address.
+     *
+     * @param string      $email Reply-to email.
+     * @param string|null $name  Optional reply-to name.
+     *
+     * @return $this
+     *
+     * @throws Exception If email is invalid.
+     */
+    public function replyTo(string $email, ?string $name = null): self
+    {
+        $this->touchMessage();
+
+        $email = Validator::email($email);
+        if (!$email) {
+            throw new Exception('Invalid "reply-to" email address');
+        }
+
+        $name = $name !== null ? Validator::string($name) : '';
+        $this->mail->addReplyTo($email, $name);
+
+        return $this;
+    }
+
+    /**
+     * Set the subject line.
+     *
+     * @param string $subject Subject text.
+     *
+     * @return $this
+     */
+    public function subject(string $subject): self
+    {
+        $this->touchMessage();
+
+        $this->mail->Subject = Validator::string($subject);
+
+        return $this;
+    }
+
+    /**
+     * Set HTML body (and optional plain-text alternative).
+     *
+     * @param string      $html    HTML content.
+     * @param string|null $altText Optional plain-text body. If null, generated from HTML.
+     *
+     * @return $this
+     */
+    public function html(string $html, ?string $altText = null): self
+    {
+        $this->touchMessage();
+
+        $this->mail->isHTML(true);
+        $this->mail->Body    = $html;
+        $this->mail->AltBody = $altText ?? $this->convertToPlainText($html);
+
+        return $this;
+    }
+
+    /**
+     * Set a plain-text-only body.
+     *
+     * @param string $text Plain-text body.
+     *
+     * @return $this
+     */
+    public function text(string $text): self
+    {
+        $this->touchMessage();
+
+        $text = Validator::string($text);
+        $this->mail->isHTML(false);
+        $this->mail->Body    = $text;
+        $this->mail->AltBody = $text;
+
+        return $this;
+    }
+
+    /**
+     * Attach a single file.
+     *
+     * @param string      $path File path.
+     * @param string|null $name Optional attachment name.
+     *
+     * @return $this
+     *
+     * @throws Exception If file does not exist.
+     */
+    public function attach(string $path, ?string $name = null): self
+    {
+        $this->touchMessage();
+
+        if (!file_exists($path)) {
+            throw new Exception("Attachment file does not exist: {$path}");
+        }
+
+        $this->mail->addAttachment($path, $name ?? '');
+
+        return $this;
+    }
+
+    /**
+     * Attach multiple files.
+     *
+     * @param array<int,string|array{path:string,name?:string|null}> $attachments
+     *
+     * @return $this
+     *
+     * @throws Exception If any file does not exist.
+     */
+    public function attachMany(array $attachments): self
+    {
+        foreach ($attachments as $attachment) {
+            if (is_array($attachment)) {
+                $path = $attachment['path'] ?? null;
+                $name = $attachment['name'] ?? null;
+
+                if (!$path || !file_exists($path)) {
+                    throw new Exception('Attachment file does not exist: ' . ($path ?? 'unknown'));
+                }
+
+                $this->mail->addAttachment($path, $name ?? '');
+                continue;
+            }
+
+            $this->attach($attachment);
+        }
+
+        return $this;
+    }
+
+    /**
+     * Send the composed email.
+     *
+     * @return bool True on success, false otherwise.
+     *
+     * @throws Exception If sending fails.
+     */
+    public function send(): bool
     {
         try {
-            // Validate and sanitize inputs
-            $to = Validator::email($to);
-            if (!$to) {
-                throw new Exception('Invalid email address for the main recipient');
-            }
+            $sent = $this->mail->send();
+            $this->resetMessage();
+            $this->messageDirty = false;
 
-            $subject = Validator::string($subject);
-            $body = Validator::html($body);
-            $altBody = $this->convertToPlainText($body);
-
-            $name = $options['name'] ?? '';
-            $addCC = $options['addCC'] ?? [];
-            $addBCC = $options['addBCC'] ?? [];
-            $attachments = $options['attachments'] ?? [];
-
-            $name = Validator::string($name);
-
-            // Handle CC recipients
-            $this->handleRecipients($addCC, 'CC');
-            // Handle BCC recipients
-            $this->handleRecipients($addBCC, 'BCC');
-            // Handle file attachments if provided
-            if (!empty($attachments)) {
-                $this->handleAttachments($attachments);
-            }
-
-            // Set the main recipient and other email properties
-            $this->mail->addAddress($to, $name);
-            $this->mail->isHTML(true);
-            $this->mail->Subject = $subject;
-            $this->mail->Body = $body;
-            $this->mail->AltBody = $altBody;
-
-            // Send the email
-            return $this->mail->send();
+            return $sent;
         } catch (Exception $e) {
-            throw new Exception($e->getMessage());
+            $this->resetMessage();
+            $this->messageDirty = false;
+
+            throw new Exception('Mail could not be sent: ' . $e->getMessage(), 0, $e);
         }
     }
 
     /**
-     * Handle adding CC or BCC recipients.
+     * Get the underlying PHPMailer instance for low-level configuration.
      *
-     * @param string|array $recipients Email addresses to add.
-     * @param string $type Type of recipient ('CC' or 'BCC').
-     *
-     * @throws Exception Throws an exception if any email address is invalid.
+     * @return PHPMailer
      */
-    private function handleRecipients(string|array $recipients, string $type): void
+    public function raw(): PHPMailer
     {
-        if (!empty($recipients)) {
-            $method = $type === 'CC' ? 'addCC' : 'addBCC';
-
-            if (is_array($recipients)) {
-                foreach ($recipients as $recipient) {
-                    $recipient = Validator::email($recipient);
-                    if ($recipient) {
-                        $this->mail->{$method}($recipient);
-                    } else {
-                        throw new Exception("Invalid email address in $type");
-                    }
-                }
-            } else {
-                $recipient = Validator::email($recipients);
-                if ($recipient) {
-                    $this->mail->{$method}($recipient);
-                } else {
-                    throw new Exception("Invalid email address in $type");
-                }
-            }
-        }
+        return $this->mail;
     }
 
-    /**
-     * Handle adding file attachments.
-     *
-     * @param string|array $attachments File path(s) to attach.
-     *                                  You can pass a string for a single file or an array of file paths.
-     *                                  Alternatively, each attachment can be an array with keys 'path' and 'name' for custom naming.
-     *
-     * @throws Exception Throws an exception if any attachment file is not found.
-     */
-    private function handleAttachments(string|array $attachments): void
+    private function touchMessage(): void
     {
-        if (is_array($attachments)) {
-            foreach ($attachments as $attachment) {
-                if (is_array($attachment)) {
-                    $file = $attachment['path'] ?? null;
-                    $name = $attachment['name'] ?? '';
-                    if (!$file || !file_exists($file)) {
-                        throw new Exception("Attachment file does not exist: " . ($file ?? 'unknown'));
-                    }
-                    $this->mail->addAttachment($file, $name);
-                } else {
-                    if (!file_exists($attachment)) {
-                        throw new Exception("Attachment file does not exist: $attachment");
-                    }
-                    $this->mail->addAttachment($attachment);
-                }
-            }
-        } else {
-            if (!file_exists($attachments)) {
-                throw new Exception("Attachment file does not exist: $attachments");
-            }
-            $this->mail->addAttachment($attachments);
+        if (!$this->messageDirty) {
+            $this->resetMessage();
+            $this->messageDirty = true;
         }
     }
 
-    /**
-     * Convert HTML content to plain text.
-     *
-     * @param string $html The HTML content to convert.
-     * @return string The plain text content.
-     */
+    private function resetMessage(): void
+    {
+        $this->mail->clearAllRecipients();
+        $this->mail->clearAttachments();
+
+        $this->mail->Subject = '';
+        $this->mail->Body    = '';
+        $this->mail->AltBody = '';
+    }
+
     private function convertToPlainText(string $html): string
     {
-        return strip_tags(str_replace(['<br>', '<br/>', '<br />', '</p>'], "\n", $html));
+        $text = str_replace(
+            ['<br>', '<br/>', '<br />', '</p>', '</div>'],
+            "\n",
+            $html
+        );
+
+        $text = strip_tags($text);
+        $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = preg_replace('/\n{3,}/', "\n\n", $text) ?? $text;
+
+        return trim($text);
     }
 }
