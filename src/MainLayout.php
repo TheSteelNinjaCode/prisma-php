@@ -12,7 +12,6 @@ class MainLayout
     public static string $title = '';
     public static string $description = '';
     public static string $children = '';
-    public static string $childLayoutChildren = '';
     public static string $html = '';
 
     /** @var Set<string>|null */
