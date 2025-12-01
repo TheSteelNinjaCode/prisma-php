@@ -212,17 +212,22 @@ class TemplateCompiler
             return $content;
         }
 
-        return preg_replace_callback(
-            self::getPattern('mustache'),
-            static function (array $matches): string {
-                if (!str_contains($matches[1], '<') && !str_contains($matches[1], '>')) {
-                    return $matches[0];
-                }
+        return self::processCDataAwareParts(
+            $content,
+            static function (string $part): string {
+                return preg_replace_callback(
+                    self::getPattern('mustache'),
+                    static function (array $matches): string {
+                        if (!str_contains($matches[1], '<') && !str_contains($matches[1], '>')) {
+                            return $matches[0];
+                        }
 
-                $expression = str_replace(['<', '>'], ['&lt;', '&gt;'], $matches[1]);
-                return '{' . $expression . '}';
-            },
-            $content
+                        $expression = str_replace(['<', '>'], ['&lt;', '&gt;'], $matches[1]);
+                        return '{' . $expression . '}';
+                    },
+                    $part
+                );
+            }
         );
     }
 
@@ -309,17 +314,22 @@ class TemplateCompiler
             return $html;
         }
 
-        return preg_replace_callback(
-            self::getPattern('attribute'),
-            static function (array $m): string {
-                if (!str_contains($m[3], '<') && !str_contains($m[3], '>')) {
-                    return $m[0];
-                }
+        return self::processCDataAwareParts(
+            $html,
+            static function (string $part): string {
+                return preg_replace_callback(
+                    self::getPattern('attribute'),
+                    static function (array $m): string {
+                        if (!str_contains($m[3], '<') && !str_contains($m[3], '>')) {
+                            return $m[0];
+                        }
 
-                return $m[1] . $m[2] .
-                    str_replace(['<', '>'], ['&lt;', '&gt;'], $m[3]) . $m[2];
-            },
-            $html
+                        return $m[1] . $m[2] .
+                            str_replace(['<', '>'], ['&lt;', '&gt;'], $m[3]) . $m[2];
+                    },
+                    $part
+                );
+            }
         );
     }
 
@@ -334,30 +344,35 @@ class TemplateCompiler
             return $content;
         }
 
-        return preg_replace_callback(
-            self::getPattern('literal_text_tags'),
-            static function (array $matches): string {
-                $openTag = $matches[1];
-                $textContent = $matches[2];
-                $closeTag = $matches[3];
+        return self::processCDataAwareParts(
+            $content,
+            static function (string $part): string {
+                return preg_replace_callback(
+                    self::getPattern('literal_text_tags'),
+                    static function (array $matches): string {
+                        $openTag = $matches[1];
+                        $textContent = $matches[2];
+                        $closeTag = $matches[3];
 
-                if (!str_contains($textContent, '<') && !str_contains($textContent, '>')) {
-                    return $matches[0];
-                }
+                        if (!str_contains($textContent, '<') && !str_contains($textContent, '>')) {
+                            return $matches[0];
+                        }
 
-                $escapedContent = preg_replace_callback(
-                    self::getPattern('literal_text_operators'),
-                    static function (array $match): string {
-                        $operator = $match[2];
-                        $escapedOp = str_replace(['<', '>'], ['&lt;', '&gt;'], $operator);
-                        return $match[1] . $escapedOp . $match[3];
+                        $escapedContent = preg_replace_callback(
+                            self::getPattern('literal_text_operators'),
+                            static function (array $match): string {
+                                $operator = $match[2];
+                                $escapedOp = str_replace(['<', '>'], ['&lt;', '&gt;'], $operator);
+                                return $match[1] . $escapedOp . $match[3];
+                            },
+                            $textContent
+                        );
+
+                        return $openTag . $escapedContent . $closeTag;
                     },
-                    $textContent
+                    $part
                 );
-
-                return $openTag . $escapedContent . $closeTag;
-            },
-            $content
+            }
         );
     }
 
