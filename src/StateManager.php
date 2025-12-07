@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace PP;
 
 use PP\Request;
+use ArrayObject;
 
 class StateManager
 {
@@ -24,19 +25,20 @@ class StateManager
     /**
      * Gets the state value for the specified key.
      *
+     * @template TDefault
      * @param string|null $key The key of the state value to get.
-     * @param mixed $initialValue The initial value to set if the key does not exist.
-     * @return mixed The state value for the specified key.
+     * @param TDefault $initialValue The initial value to set if the key does not exist.
+     * @return TDefault|ArrayObject
      */
     public static function getState(?string $key = null, mixed $initialValue = null): mixed
     {
         if ($key === null) {
-            return new \ArrayObject(self::$state, \ArrayObject::ARRAY_AS_PROPS);
+            return new ArrayObject(self::$state, ArrayObject::ARRAY_AS_PROPS);
         }
 
         $value = self::$state[$key] ?? $initialValue;
 
-        return is_array($value) ? new \ArrayObject($value, \ArrayObject::ARRAY_AS_PROPS) : $value;
+        return is_array($value) ? new ArrayObject($value, ArrayObject::ARRAY_AS_PROPS) : $value;
     }
 
     /**
