@@ -87,6 +87,7 @@ class TemplateCompiler
     private static array $compiledPatterns = [];
     private static int $maxCacheSize = 100;
     private static array $cacheStats = [];
+    private static array $componentFileStack = [];
 
     public static function compile(string $templateContent): string
     {
@@ -122,6 +123,7 @@ class TemplateCompiler
         if (self::$compileDepth === 0) {
             self::$componentInstanceCounts = [];
             self::$contextStack = ['app'];
+            self::$componentFileStack = [];
         }
         self::$compileDepth++;
 
@@ -592,8 +594,12 @@ class TemplateCompiler
 
         $parentContext = self::getCurrentContext();
 
+        $componentFilePath = SRC_PATH . '/' . str_replace('\\', '/', $mapping['filePath']);
+        $componentFilePath = str_replace('\\', '/', $componentFilePath);
+
         self::$sectionStack[] = $sectionId;
         self::$contextStack[] = $sectionId;
+        self::$componentFileStack[] = $componentFilePath;
 
         try {
             $instance = self::initializeComponentInstance($mapping, $normalizedProps);
@@ -625,6 +631,7 @@ class TemplateCompiler
         } finally {
             self::$sectionStack = $originalStack;
             self::$contextStack = $originalContextStack;
+            array_pop(self::$componentFileStack);
         }
     }
 
@@ -1077,6 +1084,20 @@ class TemplateCompiler
             return $mappings;
         }
 
+        if (!empty(self::$componentFileStack)) {
+            foreach ($mappings as $entry) {
+                if (isset($entry['importer'])) {
+                    $importerPath = str_replace('\\', '/', $entry['importer']);
+
+                    foreach (self::$componentFileStack as $stackFile) {
+                        if ($importerPath === $stackFile) {
+                            return $entry;
+                        }
+                    }
+                }
+            }
+        }
+
         $currentFile = str_replace('\\', '/', Bootstrap::$contentToInclude);
 
         foreach ($mappings as $entry) {
@@ -1090,14 +1111,12 @@ class TemplateCompiler
         }
 
         $srcNorm = str_replace('\\', '/', SRC_PATH);
-        $currentRelative = str_replace($srcNorm, '', $currentFile);
-        $currentRelative = ltrim($currentRelative, '/');
+        $currentRelative = str_replace($srcNorm . '/', '', $currentFile);
 
         foreach ($mappings as $entry) {
             if (isset($entry['importer'])) {
                 $importerPath = str_replace('\\', '/', $entry['importer']);
-                $importerRelative = str_replace($srcNorm, '', $importerPath);
-                $importerRelative = ltrim($importerRelative, '/');
+                $importerRelative = str_replace($srcNorm . '/', '', $importerPath);
 
                 if ($importerRelative === $currentRelative) {
                     return $entry;
