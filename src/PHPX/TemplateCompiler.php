@@ -1204,7 +1204,10 @@ class TemplateCompiler
             return $string;
         }
 
-        return strtolower(preg_replace('/([a-z])([A-Z])/', '$1-$2', $string));
+        $string = preg_replace('/([a-z\d])([A-Z])/', '$1-$2', $string);
+        $string = preg_replace('/([A-Z]+)([A-Z][a-z])/', '$1-$2', $string);
+
+        return strtolower($string);
     }
 
     /**
