@@ -8,7 +8,6 @@ use Bootstrap;
 use PP\MainLayout;
 use Throwable;
 use PP\PHPX\Exceptions\ComponentValidationException;
-use PP\PHPX\TemplateCompiler;
 
 class ErrorHandler
 {
@@ -118,17 +117,7 @@ class ErrorHandler
                     require_once $errorFile;
                     MainLayout::$children = ob_get_clean();
 
-                    // Capture layout output
-                    ob_start();
                     require $layoutFile;
-                    $html = ob_get_clean();
-
-                    // Compile and prepend DOCTYPE
-                    $html = TemplateCompiler::compile($html);
-                    $html = TemplateCompiler::injectDynamicContent($html);
-                    $html = "<!DOCTYPE html>\n" . $html;
-
-                    echo $html;
                 } else {
                     echo self::$content;
                 }
