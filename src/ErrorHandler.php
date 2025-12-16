@@ -8,6 +8,7 @@ use Bootstrap;
 use PP\MainLayout;
 use Throwable;
 use PP\PHPX\Exceptions\ComponentValidationException;
+use PP\PHPX\TemplateCompiler;
 
 class ErrorHandler
 {
@@ -90,17 +91,22 @@ class ErrorHandler
 
         if ($_ENV['SHOW_ERRORS'] === "false") {
             if ($errorFileExists) {
-                $contentToAdd = Bootstrap::isAjaxOrXFileRequestOrRouteFile() ? "An error occurred" : "<div class='error'>An error occurred</div>";
+                $contentToAdd = Bootstrap::isAjaxOrXFileRequestOrRouteFile()
+                    ? "An error occurred"
+                    : "<div class='error'>An error occurred</div>";
             } else {
                 exit;
             }
         }
 
         if ($errorFileExists) {
-            if (ob_get_level()) {
+            // Clear ALL output buffers
+            while (ob_get_level()) {
                 ob_end_clean();
             }
+
             self::$content = $contentToAdd;
+
             if (Bootstrap::isAjaxOrXFileRequestOrRouteFile()) {
                 header('Content-Type: application/json');
                 echo json_encode(['success' => false, 'error' => self::$content]);
@@ -111,18 +117,34 @@ class ErrorHandler
                     ob_start();
                     require_once $errorFile;
                     MainLayout::$children = ob_get_clean();
+
+                    // Capture layout output
+                    ob_start();
                     require $layoutFile;
+                    $html = ob_get_clean();
+
+                    // Compile and prepend DOCTYPE
+                    $html = TemplateCompiler::compile($html);
+                    $html = TemplateCompiler::injectDynamicContent($html);
+                    $html = "<!DOCTYPE html>\n" . $html;
+
+                    echo $html;
                 } else {
                     echo self::$content;
                 }
             }
         } else {
+            // Clear ALL output buffers
+            while (ob_get_level()) {
+                ob_end_clean();
+            }
+
             if (Bootstrap::isAjaxOrXFileRequestOrRouteFile()) {
                 header('Content-Type: application/json');
                 echo json_encode(['success' => false, 'error' => $contentToAdd]);
                 http_response_code(403);
             } else {
-                echo $contentToAdd;
+                echo "<!DOCTYPE html>\n<html><body>" . $contentToAdd . "</body></html>";
             }
         }
         exit;
@@ -299,7 +321,7 @@ class ErrorHandler
         
         <div class="p-6">
             <div class="bg-white border border-red-200 rounded-lg p-4 mb-4">
-                <p class="text-red-800 font-medium break-words">{$message}</p>
+                <p class="text-red-800 font-medium wrap-break-word">{$message}</p>
             </div>
             
             <div class="text-sm text-gray-600 mb-4">
