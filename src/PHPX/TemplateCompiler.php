@@ -1084,13 +1084,30 @@ class TemplateCompiler
             return $mappings;
         }
 
+        $currentFile = self::normalizePathForComparison(Bootstrap::$contentToInclude);
+
         if (!empty(self::$componentFileStack)) {
             foreach ($mappings as $entry) {
                 if (isset($entry['importer'])) {
-                    $importerPath = str_replace('\\', '/', $entry['importer']);
-
+                    $importerPath = self::normalizePathForComparison($entry['importer']);
                     foreach (self::$componentFileStack as $stackFile) {
-                        if ($importerPath === $stackFile) {
+                        $normalizedStackFile = self::normalizePathForComparison($stackFile);
+                        if (
+                            self::pathsMatch($importerPath, $normalizedStackFile) &&
+                            self::componentNameMatchesClassName($componentName, $entry['className'])
+                        ) {
+                            return $entry;
+                        }
+                    }
+                }
+            }
+
+            foreach ($mappings as $entry) {
+                if (isset($entry['importer'])) {
+                    $importerPath = self::normalizePathForComparison($entry['importer']);
+                    foreach (self::$componentFileStack as $stackFile) {
+                        $normalizedStackFile = self::normalizePathForComparison($stackFile);
+                        if (self::pathsMatch($importerPath, $normalizedStackFile)) {
                             return $entry;
                         }
                     }
@@ -1098,33 +1115,86 @@ class TemplateCompiler
             }
         }
 
-        $currentFile = str_replace('\\', '/', Bootstrap::$contentToInclude);
-
         foreach ($mappings as $entry) {
             if (isset($entry['importer'])) {
-                $importerPath = str_replace('\\', '/', $entry['importer']);
-
-                if ($importerPath === $currentFile) {
+                $importerPath = self::normalizePathForComparison($entry['importer']);
+                if (
+                    self::pathsMatch($importerPath, $currentFile) &&
+                    self::componentNameMatchesClassName($componentName, $entry['className'])
+                ) {
                     return $entry;
                 }
             }
         }
 
-        $srcNorm = str_replace('\\', '/', SRC_PATH);
-        $currentRelative = str_replace($srcNorm . '/', '', $currentFile);
-
         foreach ($mappings as $entry) {
             if (isset($entry['importer'])) {
-                $importerPath = str_replace('\\', '/', $entry['importer']);
-                $importerRelative = str_replace($srcNorm . '/', '', $importerPath);
-
-                if ($importerRelative === $currentRelative) {
+                $importerPath = self::normalizePathForComparison($entry['importer']);
+                if (self::pathsMatch($importerPath, $currentFile)) {
                     return $entry;
                 }
+            }
+        }
+
+        foreach ($mappings as $entry) {
+            if (self::componentNameMatchesClassName($componentName, $entry['className'])) {
+                return $entry;
             }
         }
 
         return $mappings[0];
+    }
+
+    private static function normalizePathForComparison(string $path): string
+    {
+        $path = str_replace('\\', '/', $path);
+        $srcPath = str_replace('\\', '/', SRC_PATH);
+
+        if (str_starts_with($path, $srcPath)) {
+            $path = substr($path, strlen($srcPath));
+            $path = ltrim($path, '/');
+        }
+
+        if (preg_match('#[a-zA-Z]:/.*?/src/(.+)$#', $path, $matches)) {
+            $path = $matches[1];
+        }
+
+        if (preg_match('#/src/(.+)$#', $path, $matches)) {
+            $path = $matches[1];
+        }
+
+        return strtolower(trim($path, '/'));
+    }
+
+    private static function pathsMatch(string $path1, string $path2): bool
+    {
+        if ($path1 === $path2) {
+            return true;
+        }
+
+        $parts1 = array_filter(explode('/', $path1));
+        $parts2 = array_filter(explode('/', $path2));
+
+        if (count($parts1) === count($parts2)) {
+            return $parts1 === $parts2;
+        }
+
+        $minCount = min(count($parts1), count($parts2));
+        if ($minCount > 0) {
+            $slice1 = array_slice($parts1, -$minCount);
+            $slice2 = array_slice($parts2, -$minCount);
+            return $slice1 === $slice2;
+        }
+
+        return false;
+    }
+
+    private static function componentNameMatchesClassName(string $componentName, string $className): bool
+    {
+        $parts = explode('\\', $className);
+        $lastPart = end($parts);
+
+        return $componentName === $lastPart;
     }
 
     public static function innerXml(DOMNode $node): string
