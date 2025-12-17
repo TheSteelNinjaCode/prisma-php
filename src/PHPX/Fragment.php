@@ -11,6 +11,7 @@ class Fragment extends PHPX
     /** @property ?string $as = div|span|section|article|nav|header|footer|main|aside */
     public ?string $as = null;
     public ?string $class = '';
+    public mixed $children = null;
 
     public function __construct(array $props = [])
     {
