@@ -24,21 +24,28 @@ final class Validator
      * Validate and sanitize a string.
      *
      * This function converts the input to a string, trims any leading or trailing
-     * whitespace, and optionally converts special characters to HTML entities to 
+     * whitespace, and optionally converts special characters to HTML entities to
      * prevent XSS attacks. If the input is null, an empty string is returned.
      *
      * @param mixed $value The value to validate and sanitize. This can be of any type.
-     * @param bool $escapeHtml Whether to escape special characters as HTML entities. 
-     *                         Defaults to true. Set to false when handling database 
-     *                         queries or other non-HTML contexts.
-     * @return string The sanitized string. If the input is not a string or null, 
-     *                it is converted to its string representation before sanitization. 
-     *                If the input is null, an empty string is returned.
+     * @param bool $escapeHtml Whether to escape special characters as HTML entities.
+     * Defaults to true. Set to false when handling database
+     * queries or other non-HTML contexts.
+     * @return string The sanitized string. If the input is not a string or null,
+     * it is converted to its string representation before sanitization.
+     * If the input is null, an empty string is returned.
      */
     public static function string($value, bool $escapeHtml = true): string
     {
-        // Convert the value to a string if it's not null
-        $stringValue = $value !== null ? (string)$value : '';
+        // Handle DateTime objects by converting them to ISO 8601 format
+        if ($value instanceof DateTime) {
+            $stringValue = $value->format('Y-m-d H:i:s');
+        } elseif ($value !== null) {
+            // Convert the value to a string if it's not null
+            $stringValue = (string)$value;
+        } else {
+            $stringValue = '';
+        }
 
         // If escaping is enabled, apply htmlspecialchars; otherwise, just trim
         return $escapeHtml ? htmlspecialchars(trim($stringValue), ENT_QUOTES, 'UTF-8') : trim($stringValue);
@@ -728,13 +735,8 @@ final class Validator
         // Get the MIME type of the file using PHP's finfo_file function
         $finfo = finfo_open(FILEINFO_MIME_TYPE);
         $mimeType = finfo_file($finfo, $file);
-        finfo_close($finfo);
 
         // Check if the MIME type is in the list of allowed MIME types
-        if (in_array($mimeType, $allowedMimeTypes, true)) {
-            return true;
-        }
-
-        return false;
+        return in_array($mimeType, $allowedMimeTypes, true);
     }
 }
