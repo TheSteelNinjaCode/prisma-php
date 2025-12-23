@@ -8,7 +8,7 @@ use PP\PrismaPHPSettings;
 
 class CacheHandler
 {
-    public static bool $isCacheable = true; // Enable or disable caching by route
+    public static ?bool $isCacheable = null; // null = follow global, true = force cache, false = force no cache
     public static int $ttl = 0; // Time to live in seconds (0 = no action taken)
 
     private static string $cacheDir = DOCUMENT_PATH . '/caches';
@@ -99,6 +99,54 @@ class CacheHandler
         }
     }
 
+    /**
+     * Invalidate cache for multiple routes by URI.
+     * 
+     * Accepts URIs with or without leading slash - both formats work.
+     * Use this when you need to clear cache for specific routes after data changes.
+     * 
+     * @param string|array $uris Single URI or array of URIs to invalidate
+     * 
+     * @example
+     * Single route
+     * CacheHandler::invalidateByUri('/users');
+     * 
+     * Multiple routes
+     * CacheHandler::invalidateByUri(['/', '/users', '/dashboard']);
+     * 
+     * After updating user data
+     * function updateUser($data) {
+     *  ... update logic
+     *     CacheHandler::invalidateByUri(['/', '/users', '/user-profile']);
+     *     return $result;
+     * }
+     */
+    public static function invalidateByUri(string|array $uris): void
+    {
+        $uris = is_array($uris) ? $uris : [$uris];
+
+        foreach ($uris as $uri) {
+            $normalizedUri = ltrim($uri, '/');
+            if ($normalizedUri === '') {
+                $normalizedUri = '/';
+            }
+            self::resetCache($normalizedUri);
+        }
+    }
+
+    /**
+     * Reset/clear cache files.
+     * 
+     * @param string|null $uri If provided, clears only that route's cache. 
+     *                         If null, clears ALL cache files.
+     * 
+     * @example
+     * Clear specific route
+     * CacheHandler::resetCache('/users');
+     * 
+     * Clear all cache
+     * CacheHandler::resetCache();
+     */
     public static function resetCache(?string $uri = null): void
     {
         self::ensureCacheDirectoryExists();
