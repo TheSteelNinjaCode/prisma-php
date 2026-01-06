@@ -442,18 +442,26 @@ class Request
      */
     public static function redirect(string $url, bool $replace = true, int $responseCode = 0): void
     {
-        if (ob_get_length()) {
-            ob_clean();
+        if (headers_sent()) {
+            exit;
         }
 
-        ob_start();
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+
+        $status = $responseCode > 0 ? $responseCode : 302;
 
         if (!self::$isWire && !self::$isAjax) {
-            header("Location: $url", $replace, $responseCode);
-        } else {
-            echo "redirect_7F834=$url";
-            ob_end_flush();
+            header("Location: $url", $replace, $status);
+            exit;
         }
+
+        http_response_code(200);
+        header("X-PP-Redirect: $url");
+        header("X-PP-Redirect-Status: $status");
+        header("X-PP-Redirect-Replace: " . ($replace ? "1" : "0"));
+        header("Cache-Control: no-store");
 
         exit;
     }
