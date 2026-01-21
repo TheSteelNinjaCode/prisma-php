@@ -1,4 +1,5 @@
 <?php
+
 namespace PP\Security;
 
 use PP\Headers\Boom;
@@ -6,17 +7,17 @@ use PP\Headers\Boom;
 final class RateLimiter
 {
     /**
-     * Lanza HTTP 429 si se supera el máximo de intentos en la ventana dada.
+     * Throws an HTTP 429 if the maximum number of attempts within the given window is exceeded.
      *
-     * @param string $key          Identificador único (p. ej. IP o user‑id).
-     * @param int    $maxAttempts  Nº de peticiones permitidas.
-     * @param int    $seconds      Ventana de tiempo en segundos.
+     * @param string $key         Unique identifier (e.g., IP or user-id).
+     * @param int    $maxAttempts Number of allowed requests.
+     * @param int    $seconds     Time window in seconds.
      */
     public static function check(string $key, int $maxAttempts = 60, int $seconds = 60): void
     {
         if (!function_exists('apcu_fetch')) {
-            // APCu no instalado: conviene registrar un “fallback” o lanzar excepción.
-            Boom::internal("APCu extension missing for rate‑limit.")->toResponse();
+            // APCu not installed: consider registering a fallback or throwing an exception.
+            Boom::internalServerError("APCu extension missing for rate‑limit.")->toResponse();
         }
 
         $apcuKey = "ratelimit:{$key}";
@@ -27,7 +28,7 @@ final class RateLimiter
             Boom::tooManyRequests('Rate limit exceeded, try again later.')->toResponse();
         }
 
-        // Incrementa contador y refresca TTL
+        // Increment counter and refresh TTL
         apcu_store($apcuKey, $current + 1, $seconds);
     }
 }
