@@ -8,6 +8,7 @@ use Bootstrap;
 use PP\MainLayout;
 use Throwable;
 use PP\PHPX\Exceptions\ComponentValidationException;
+use PP\Env;
 
 class ErrorHandler
 {
@@ -88,7 +89,7 @@ class ErrorHandler
         $errorFile = APP_PATH . '/error.php';
         $errorFileExists = file_exists($errorFile);
 
-        if (getenv('SHOW_ERRORS') === 'true') {
+        if (Env::bool('SHOW_ERRORS') === true) {
             if ($errorFileExists) {
                 $contentToAdd = Bootstrap::isAjaxOrXFileRequestOrRouteFile()
                     ? "An error occurred"

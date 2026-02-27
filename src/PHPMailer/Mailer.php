@@ -7,6 +7,7 @@ namespace PP\PHPMailer;
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 use PP\Validator;
+use PP\Env;
 
 class Mailer
 {
@@ -26,18 +27,18 @@ class Mailer
     {
         $this->mail->isSMTP();
         $this->mail->SMTPDebug  = 0;
-        $this->mail->Host       = getenv('SMTP_HOST')       ?: 'localhost';
+        $this->mail->Host       = Env::string('SMTP_HOST', 'localhost');
         $this->mail->SMTPAuth   = true;
-        $this->mail->Username   = getenv('SMTP_USERNAME')   ?: '';
-        $this->mail->Password   = getenv('SMTP_PASSWORD')   ?: '';
-        $this->mail->SMTPSecure = getenv('SMTP_ENCRYPTION') ?: PHPMailer::ENCRYPTION_STARTTLS;
-        $this->mail->Port       = (int) (getenv('SMTP_PORT') ?: 587);
+        $this->mail->Username   = Env::string('SMTP_USERNAME', '');
+        $this->mail->Password   = Env::string('SMTP_PASSWORD', '');
+        $this->mail->SMTPSecure = Env::string('SMTP_ENCRYPTION', PHPMailer::ENCRYPTION_STARTTLS);
+        $this->mail->Port       = Env::int('SMTP_PORT', 587);
     }
 
     private function configureDefaultFrom(): void
     {
-        $from     = getenv('MAIL_FROM')      ?: null;
-        $fromName = getenv('MAIL_FROM_NAME') ?: '';
+        $from     = Env::get('MAIL_FROM');
+        $fromName = Env::string('MAIL_FROM_NAME', '');
 
         if ($from) {
             $email = Validator::email($from);
