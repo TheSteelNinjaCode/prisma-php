@@ -15,6 +15,7 @@ use Brick\Math\RoundingMode;
 use InvalidArgumentException;
 use BackedEnum;
 use Throwable;
+use PP\Rule;
 
 final class Validator
 {
@@ -493,29 +494,56 @@ final class Validator
     /**
      * Validate a value against a set of rules.
      *
-     * @param mixed $value The value to validate.
-     * @param string $rules A pipe-separated string of rules (e.g., 'required|min:2|max:50').
-     * @param mixed $confirmationValue The value to confirm against, if applicable.
-     * @return bool|string|null True if validation passes, string with error message if fails, or null for optional field.
+     * Supports:
+     * - string pipe syntax: "required|min:2|max:50"
+     * - Rule builder: Rule::required()->min(2)->max(50)
+     * - array syntax: ['required', 'min:2', 'max:50']
+     *
+     * @param mixed $value
+     * @param string|Rule|array<int,string> $rules
+     * @param mixed $confirmationValue
+     * @return bool|string|null
      */
-    public static function withRules($value, string $rules, $confirmationValue = null)
+    public static function withRules($value, string|Rule|array $rules, $confirmationValue = null)
     {
-        $rulesArray = explode('|', $rules);
+        $rulesArray = self::normalizeRules($rules);
+
         foreach ($rulesArray as $rule) {
-            // Handle parameters in rules, e.g., 'min:10'
+            if ($rule === '') {
+                continue;
+            }
+
+            // Split only first ":" so regex patterns with ":" are safer
             if (strpos($rule, ':') !== false) {
-                [$ruleName, $parameter] = explode(':', $rule);
+                [$ruleName, $parameter] = explode(':', $rule, 2);
                 $result = self::applyRule($ruleName, $parameter, $value, $confirmationValue);
             } else {
                 $result = self::applyRule($rule, null, $value, $confirmationValue);
             }
 
-            // If a validation rule fails, return the error message
             if ($result !== true) {
                 return $result;
             }
         }
+
         return true;
+    }
+
+    /**
+     * @param string|Rule|array<int,string> $rules
+     * @return array<int,string>
+     */
+    private static function normalizeRules(string|Rule|array $rules): array
+    {
+        if ($rules instanceof Rule) {
+            return $rules->toArray();
+        }
+
+        if (is_array($rules)) {
+            return array_values(array_filter(array_map('trim', $rules), static fn($r) => $r !== ''));
+        }
+
+        return array_values(array_filter(array_map('trim', explode('|', $rules)), static fn($r) => $r !== ''));
     }
 
     /**
