@@ -13,6 +13,18 @@ class ErrorHandler
 {
     public static string $content = '';
 
+    private static function envBool(string $key, bool $default = false): bool
+    {
+        $v = getenv($key);
+        if ($v === false) {
+            $v = $_ENV[$key] ?? $_SERVER[$key] ?? null;
+        }
+        if ($v === null) return $default;
+
+        $b = filter_var($v, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        return $b ?? $default;
+    }
+
     public static function registerHandlers(): void
     {
         self::registerExceptionHandler();
@@ -88,15 +100,7 @@ class ErrorHandler
         $errorFile = APP_PATH . '/error.php';
         $errorFileExists = file_exists($errorFile);
 
-        $showErrorsRaw = getenv('SHOW_ERRORS');
-        if ($showErrorsRaw === false) {
-            $showErrorsRaw = $_ENV['SHOW_ERRORS'] ?? 'false';
-        }
-
-        $showErrors = filter_var($showErrorsRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
-        $showErrors = $showErrors ?? false;
-
-        if ($showErrors === false) {
+        if (!self::envBool('SHOW_ERRORS', false)) {
             if ($errorFileExists) {
                 $contentToAdd = Bootstrap::isAjaxOrXFileRequestOrRouteFile()
                     ? "An error occurred"
