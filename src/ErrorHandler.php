@@ -89,7 +89,7 @@ class ErrorHandler
         $errorFile = APP_PATH . '/error.php';
         $errorFileExists = file_exists($errorFile);
 
-        if (Env::bool('SHOW_ERRORS') === true) {
+        if (Env::bool('SHOW_ERRORS') === false) {
             if ($errorFileExists) {
                 $contentToAdd = Bootstrap::isAjaxOrXFileRequestOrRouteFile()
                     ? "An error occurred"
