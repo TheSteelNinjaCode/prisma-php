@@ -175,7 +175,7 @@ class PrismaPHPSettings
 
     private static function getLocalStorageKey(): string
     {
-        $localStorageKey = $_ENV['LOCALSTORE_KEY'] ?? 'pp_local_store_59e13';
+        $localStorageKey = getenv('LOCALSTORE_KEY') ?: 'pp_local_store_59e13';
         return strtolower(preg_replace('/\s+/', '_', trim($localStorageKey)));
     }
 }

@@ -26,18 +26,18 @@ class Mailer
     {
         $this->mail->isSMTP();
         $this->mail->SMTPDebug  = 0;
-        $this->mail->Host       = $_ENV['SMTP_HOST']       ?? '';
+        $this->mail->Host       = getenv('SMTP_HOST')       ?: 'localhost';
         $this->mail->SMTPAuth   = true;
-        $this->mail->Username   = $_ENV['SMTP_USERNAME']   ?? '';
-        $this->mail->Password   = $_ENV['SMTP_PASSWORD']   ?? '';
-        $this->mail->SMTPSecure = $_ENV['SMTP_ENCRYPTION'] ?? PHPMailer::ENCRYPTION_STARTTLS;
-        $this->mail->Port       = (int) ($_ENV['SMTP_PORT'] ?? 587);
+        $this->mail->Username   = getenv('SMTP_USERNAME')   ?: '';
+        $this->mail->Password   = getenv('SMTP_PASSWORD')   ?: '';
+        $this->mail->SMTPSecure = getenv('SMTP_ENCRYPTION') ?: PHPMailer::ENCRYPTION_STARTTLS;
+        $this->mail->Port       = (int) (getenv('SMTP_PORT') ?: 587);
     }
 
     private function configureDefaultFrom(): void
     {
-        $from     = $_ENV['MAIL_FROM']      ?? null;
-        $fromName = $_ENV['MAIL_FROM_NAME'] ?? '';
+        $from     = getenv('MAIL_FROM')      ?: null;
+        $fromName = getenv('MAIL_FROM_NAME') ?: '';
 
         if ($from) {
             $email = Validator::email($from);
