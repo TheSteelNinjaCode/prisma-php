@@ -8,6 +8,10 @@ use DOMDocument;
 use DOMElement;
 use RuntimeException;
 use PP\PHPX\TemplateCompiler;
+use ReflectionFunction;
+use PP\Attributes\Exposed;
+use PP\Attributes\ExposedRegistry;
+use Throwable;
 
 final class ImportComponent
 {
@@ -97,19 +101,37 @@ final class ImportComponent
         $runner = static function (string $__code, array $__props, string $__ns, string $__filePath): string {
             extract($__props, EXTR_SKIP);
 
+            $beforeFns = get_defined_functions()['user'];
+
             ob_start();
             try {
-                // Simulate file path for better errors in stack traces where possible
                 $__wrapped = "namespace {$__ns};\n" . $__code;
-
-                // Execute component code (it echoes markup)
                 eval($__wrapped);
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 ob_end_clean();
                 throw new RuntimeException(
                     "Component execution failed for {$__filePath}: " . $e->getMessage(),
                     previous: $e
                 );
+            }
+
+            $afterFns = get_defined_functions()['user'];
+            $newFns   = array_values(array_diff($afterFns, $beforeFns));
+
+            foreach ($newFns as $fn) {
+                try {
+                    $ref   = new ReflectionFunction($fn);
+                    $attrs = $ref->getAttributes(Exposed::class);
+                    if (!$attrs) continue;
+
+                    $short = $ref->getShortName();
+
+                    if ($ref->getNamespaceName() !== $__ns) continue;
+
+                    ExposedRegistry::registerFunction($short, $ref->getName());
+                } catch (Throwable) {
+                    // ignore
+                }
             }
 
             return (string) ob_get_clean();
