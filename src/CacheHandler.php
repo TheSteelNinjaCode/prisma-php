@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace PP;
 
 use PP\PrismaPHPSettings;
+use PP\Env;
 
 class CacheHandler
 {
@@ -16,9 +17,7 @@ class CacheHandler
 
     private static function ensureCacheDirectoryExists(): void
     {
-        if (self::$cacheDirChecked) {
-            return;
-        }
+        if (self::$cacheDirChecked) return;
 
         if (!is_dir(self::$cacheDir) && !mkdir(self::$cacheDir, 0777, true) && !is_dir(self::$cacheDir)) {
             die("Error: Unable to create cache directory at: " . self::$cacheDir);
@@ -27,14 +26,33 @@ class CacheHandler
         self::$cacheDirChecked = true;
     }
 
+    private static function shouldCache(string $uri): bool
+    {
+        $routes = PrismaPHPSettings::$includeFiles;
+        $routeFlag = $routes[$uri]['isCacheable'] ?? null;
+        $globalEnabled = (Env::string('CACHE_ENABLED', 'false') === 'true');
+
+        if (self::$isCacheable === false) return false;
+        if (self::$isCacheable === true) return true;
+        if ($routeFlag === false) return false;
+        if ($routeFlag === true) return true;
+
+        return $globalEnabled;
+    }
+
     public static function getCacheFilePath(string $uri): string
     {
-        $requestFilesData = PrismaPHPSettings::$includeFiles;
-        $fileName = $requestFilesData[$uri]['fileName'] ?? '';
-        $isCacheable = $requestFilesData[$uri]['isCacheable'] ?? self::$isCacheable;
+        $routes = PrismaPHPSettings::$includeFiles;
+        $fileName = $routes[$uri]['fileName'] ?? '';
 
-        if (!$isCacheable || $fileName === '') {
+        if (!self::shouldCache($uri)) {
             return '';
+        }
+
+        if ($fileName === '') {
+            $clean = trim($uri, '/');
+            $fileName = preg_replace('/[^a-zA-Z0-9-_]/', '_', $clean);
+            $fileName = $fileName ? mb_strtolower($fileName, 'UTF-8') : 'index';
         }
 
         return self::$cacheDir . '/' . $fileName . '.html';
@@ -42,30 +60,16 @@ class CacheHandler
 
     private static function isExpired(string $cacheFile, int $ttlSeconds = 600): bool
     {
-        if (!file_exists($cacheFile)) {
-            return true;
-        }
-        $fileAge = time() - filemtime($cacheFile);
-        return $fileAge > $ttlSeconds;
+        if (!file_exists($cacheFile)) return true;
+        return (time() - filemtime($cacheFile)) > $ttlSeconds;
     }
 
-    /**
-     * Serve cache if available, not expired, and route is marked cacheable.
-     * We look up a route-specific TTL if defined, otherwise use a fallback.
-     */
     public static function serveCache(string $uri, int $defaultTtl = 600): void
     {
-        if ($uri === '') {
-            return;
-        }
+        if ($uri === '') return;
 
-        $requestFilesData = PrismaPHPSettings::$includeFiles;
-
-        // Get the route-specific TTL if set, or default to 0
-        $routeTtl = $requestFilesData[$uri]['cacheTtl'] ?? 0;
-
-        // If the route has a TTL greater than 0, use that.
-        // Otherwise (0 or not defined), use the default.
+        $routes = PrismaPHPSettings::$includeFiles;
+        $routeTtl = $routes[$uri]['cacheTtl'] ?? 0;
         $ttlSeconds = ($routeTtl > 0) ? $routeTtl : $defaultTtl;
 
         $cacheFile = self::getCacheFilePath($uri);
@@ -81,15 +85,13 @@ class CacheHandler
 
     public static function saveCache(string $uri, string $content, bool $useLock = true): void
     {
-        if ($uri === '') {
-            return;
-        }
+        if ($uri === '') return;
+
         self::ensureCacheDirectoryExists();
 
         $cacheFile = self::getCacheFilePath($uri);
-        if ($cacheFile === '') {
-            return;
-        }
+
+        if ($cacheFile === '') return;
 
         $flags = $useLock ? LOCK_EX : 0;
         $written = @file_put_contents($cacheFile, $content, $flags);
