@@ -31,24 +31,18 @@ final class ImportComponent
             throw new RuntimeException("Component file not found: {$filePath}");
         }
 
-        // 1) Execute PHP component safely (isolated namespace) -> HTML output
         $html = self::executePhpComponentIsolated($filePath, $props);
 
         if (trim($html) === '') {
             throw new RuntimeException("Component rendered empty output: {$filePath}");
         }
 
-        // 2) Parse rendered output as XML fragment
         $dom = TemplateCompiler::convertToXml($html);
-
-        // 3) Enforce single root
         $rootEl = self::getSingleRootElement($dom, $filePath);
-
-        // 4) Inject pp-component + props
         $rootEl->setAttribute('pp-component', self::componentIdFromPath($filePath));
+
         self::applyAttributes($rootEl, $props);
 
-        // 5) Serialize final HTML
         $newHtml = TemplateCompiler::innerXml($dom);
 
         self::$sections[$filePath] = [
@@ -58,11 +52,6 @@ final class ImportComponent
         ];
 
         echo $newHtml;
-    }
-
-    public static function import(string $filePath, array $props = []): void
-    {
-        self::render($filePath, $props);
     }
 
     public static function sections(): array
@@ -75,17 +64,6 @@ final class ImportComponent
         return 's' . base_convert(sprintf('%u', crc32($filePath)), 10, 36);
     }
 
-    /**
-     * Execute a PHP file in a unique namespace to avoid function redeclare collisions.
-     *
-     * IMPORTANT:
-     * - Props are extracted as local variables.
-     * - `use` statements in the component file keep working.
-     * - `declare(strict_types=1);` is removed from the component source before eval
-     *   because eval'd code cannot safely contain file-level declare in this context.
-     *
-     * @param array<string,mixed> $props
-     */
     private static function executePhpComponentIsolated(string $filePath, array $props): string
     {
         $source = @file_get_contents($filePath);
@@ -148,14 +126,16 @@ final class ImportComponent
             return preg_replace('/^\s*<\?php\b/i', '', $source, 1) ?? $source;
         }
 
-        // If file starts without <?php, still allow raw template-ish PHP/HTML mixture
-        return $source;
+        if (str_starts_with($trimmed, '<?=') || str_starts_with($trimmed, '<?=')) {
+            $out = preg_replace('/^\s*<\?(=)/', 'echo ', $source, 1);
+            return $out ?? $source;
+        }
+
+        return "?>\n" . $source;
     }
 
     private static function stripLeadingDeclareStrictTypes(string $source): string
     {
-        // Remove only a leading declare(strict_types=1); if present.
-        // Keep other code intact.
         $out = preg_replace(
             '/^\s*declare\s*\(\s*strict_types\s*=\s*1\s*\)\s*;\s*/i',
             '',
