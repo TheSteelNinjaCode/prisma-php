@@ -10,6 +10,7 @@ use PP\PrismaPHPSettings;
 use Exception;
 use DateTime;
 use DateTimeImmutable;
+use ReflectionClass;
 use ReflectionProperty;
 use PP\PHPX\TypeCoercer;
 use InvalidArgumentException;
@@ -32,25 +33,26 @@ class PHPX implements IPHPX
     protected array $attributesArray = [];
 
     /**
+     * @var array<class-string, array<string, \ReflectionType|null>>
+     */
+    private static array $publicPropertyTypeCache = [];
+
+    /**
      * Constructor to initialize the component with the given properties.
      *
      * @param array<string, mixed> $props Optional properties to customize the component.
      */
     public function __construct(array $props = [])
     {
+        $propertyTypes = self::getPublicPropertyTypes(static::class);
+
         foreach ($props as $key => $value) {
-            if (!property_exists($this, $key)) {
-                continue;
-            }
-
-            $reflection = new ReflectionProperty($this, $key);
-
-            if (!$reflection->isPublic()) {
+            if (!array_key_exists($key, $propertyTypes)) {
                 continue;
             }
 
             try {
-                $coercedValue = TypeCoercer::coerce($value, $reflection->getType());
+                $coercedValue = TypeCoercer::coerce($value, $propertyTypes[$key]);
                 $this->$key = $coercedValue;
             } catch (InvalidArgumentException $e) {
                 throw new InvalidArgumentException(
@@ -66,6 +68,29 @@ class PHPX implements IPHPX
 
         $this->props = $props;
         $this->children = $props['children'] ?? '';
+    }
+
+    /**
+     * @return array<string, \ReflectionType|null>
+     */
+    private static function getPublicPropertyTypes(string $className): array
+    {
+        if (!isset(self::$publicPropertyTypeCache[$className])) {
+            $reflection = new ReflectionClass($className);
+            $propertyTypes = [];
+
+            foreach ($reflection->getProperties(ReflectionProperty::IS_PUBLIC) as $property) {
+                if ($property->isStatic()) {
+                    continue;
+                }
+
+                $propertyTypes[$property->getName()] = $property->getType();
+            }
+
+            self::$publicPropertyTypeCache[$className] = $propertyTypes;
+        }
+
+        return self::$publicPropertyTypeCache[$className];
     }
 
     /**

@@ -103,12 +103,12 @@ class TemplateCompiler
         }
 
         if (count(self::$compiledCache) >= self::$maxCacheSize) {
-            $leastUsed = array_search(
-                min(array_column(self::$cacheStats, 'hits')),
-                array_column(self::$cacheStats, 'hits')
-            );
+            $leastUsed = self::findLeastUsedCacheKey();
+
+            if ($leastUsed !== null) {
             unset(self::$compiledCache[$leastUsed]);
             unset(self::$cacheStats[$leastUsed]);
+            }
         }
 
         $compiled = self::compileInternal($templateContent);
@@ -116,6 +116,30 @@ class TemplateCompiler
         self::$cacheStats[$hash] = ['hits' => 0, 'created' => time()];
 
         return $compiled;
+    }
+
+    private static function findLeastUsedCacheKey(): ?string
+    {
+        $leastUsedKey = null;
+        $leastHits = null;
+        $oldestTimestamp = null;
+
+        foreach (self::$cacheStats as $cacheKey => $stats) {
+            $hits = $stats['hits'] ?? 0;
+            $created = $stats['created'] ?? PHP_INT_MAX;
+
+            if (
+                $leastUsedKey === null ||
+                $hits < $leastHits ||
+                ($hits === $leastHits && $created < $oldestTimestamp)
+            ) {
+                $leastUsedKey = $cacheKey;
+                $leastHits = $hits;
+                $oldestTimestamp = $created;
+            }
+        }
+
+        return $leastUsedKey;
     }
 
     private static function compileInternal(string $templateContent): string
@@ -133,9 +157,7 @@ class TemplateCompiler
             }
 
             $dom = self::convertToXml($templateContent);
-            $output = self::processChildNodes($dom->documentElement->childNodes);
-
-            return implode('', $output);
+            return self::processChildNodes($dom->documentElement->childNodes);
         } finally {
             self::$compileDepth--;
         }
@@ -254,12 +276,13 @@ class TemplateCompiler
         return $dom;
     }
 
-    private static function processChildNodes($childNodes): array
+    private static function processChildNodes($childNodes): string
     {
-        $output = [];
+        $output = '';
         foreach ($childNodes as $child) {
-            $output[] = self::processNode($child);
+            $output .= self::processNode($child);
         }
+
         return $output;
     }
 
@@ -528,7 +551,7 @@ class TemplateCompiler
                 );
             }
 
-            $children = implode('', self::processChildNodes($node->childNodes));
+            $children = self::processChildNodes($node->childNodes);
             $attrs = self::getNodeAttributes($node) + ['children' => $children];
 
             return self::renderAsHtml($node->nodeName, $attrs);
@@ -657,16 +680,8 @@ class TemplateCompiler
             $instance = self::initializeComponentInstance($mapping, $normalizedProps);
 
             $reflection = self::getClassReflection($mapping['className']);
-            $hasPublicChildren = false;
 
-            foreach ($reflection['properties'] as $prop) {
-                if ($prop->getName() === 'children' && $prop->isPublic()) {
-                    $hasPublicChildren = true;
-                    break;
-                }
-            }
-
-            if ($hasPublicChildren) {
+            if ($reflection['hasPublicChildren']) {
                 $instance->children = self::getChildrenWithContextInheritance(
                     $node,
                     $parentContext,
@@ -709,19 +724,11 @@ class TemplateCompiler
 
         $reflection = self::getClassReflection($className);
 
-        $hasChildrenProp = false;
-        foreach ($reflection['properties'] as $prop) {
-            if ($prop->getName() === 'children') {
-                $hasChildrenProp = true;
-                break;
-            }
-        }
-
-        if (!$hasChildrenProp) {
+        if (!$reflection['hasPublicChildren']) {
             throw new ComponentValidationException(
                 'children',
                 $className,
-                array_map(static fn($p) => $p->getName(), $reflection['properties'])
+                $reflection['propertyNames']
             );
         }
     }
@@ -736,24 +743,21 @@ class TemplateCompiler
         self::$contextStack = [$parentContext];
 
         try {
-            $output = [];
-
+            $childrenHtml = '';
             $hasChildren = false;
+
             foreach ($node->childNodes as $child) {
-                if (
+                if (!$hasChildren && (
                     $child instanceof DOMElement ||
                     ($child instanceof DOMText && trim($child->textContent) !== '')
-                ) {
+                )) {
                     $hasChildren = true;
-                    break;
                 }
+
+                $childrenHtml .= self::processNode($child);
             }
 
-            foreach ($node->childNodes as $child) {
-                $output[] = self::processNode($child);
-            }
-
-            $childrenHtml = trim(implode('', $output));
+            $childrenHtml = trim($childrenHtml);
 
             if (!$hasChildren) {
                 return $childrenHtml;
@@ -1080,14 +1084,29 @@ class TemplateCompiler
                 $rc->getProperties(ReflectionProperty::IS_PUBLIC),
                 static fn(ReflectionProperty $p) => !$p->isStatic()
             );
+            $propertyNames = array_map(static fn(ReflectionProperty $p) => $p->getName(), $publicProps);
+            $requiredProps = [];
+
+            foreach ($publicProps as $property) {
+                $type = $property->getType();
+
+                if (
+                    $type instanceof ReflectionNamedType &&
+                    $type->isBuiltin() &&
+                    !$type->allowsNull()
+                ) {
+                    $requiredProps[] = $property->getName();
+                }
+            }
 
             self::$reflectionCache[$className] = [
                 'class' => $rc,
                 'constructor' => $rc->getConstructor(),
                 'properties' => $publicProps,
-                'allowedProps' => self::SYSTEM_PROPS + array_flip(
-                    array_map(static fn($p) => $p->getName(), $publicProps)
-                ),
+                'propertyNames' => $propertyNames,
+                'requiredProps' => $requiredProps,
+                'hasPublicChildren' => in_array('children', $propertyNames, true),
+                'allowedProps' => self::SYSTEM_PROPS + array_flip($propertyNames),
             ];
         }
 
@@ -1098,20 +1117,12 @@ class TemplateCompiler
     {
         $reflection = self::getClassReflection($className);
 
-        foreach ($reflection['properties'] as $prop) {
-            $name = $prop->getName();
-            $type = $prop->getType();
-
-            if (
-                $type instanceof ReflectionNamedType &&
-                $type->isBuiltin() &&
-                !$type->allowsNull() &&
-                !array_key_exists($name, $attributes)
-            ) {
+        foreach ($reflection['requiredProps'] as $name) {
+            if (!array_key_exists($name, $attributes)) {
                 throw new ComponentValidationException(
                     $name,
                     $className,
-                    array_map(static fn($p) => $p->getName(), $reflection['properties'])
+                    $reflection['propertyNames']
                 );
             }
         }

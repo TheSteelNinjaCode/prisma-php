@@ -16,10 +16,11 @@ class MainLayout
 
     /** @var Set<string>|null */
     private static ?Set $headScripts = null;
-    /** @var Set<string>|null */
-    private static ?Set $footerScripts = null;
+    /** @var list<string>|null */
+    private static ?array $footerScripts = null;
     private static array $customMetadata = [];
     private static array $processedScripts = [];
+    private static int $footerComponentCounter = 0;
 
     public static function init(): void
     {
@@ -27,7 +28,7 @@ class MainLayout
             self::$headScripts = new Set();
         }
         if (self::$footerScripts === null) {
-            self::$footerScripts = new Set();
+            self::$footerScripts = [];
         }
         self::$processedScripts = [];
     }
@@ -41,7 +42,7 @@ class MainLayout
     public static function addHeadScript(string ...$scripts): void
     {
         foreach ($scripts as $script) {
-            self::$headScripts->add($script);
+            self::$headScripts->add(self::prepareHeadScript($script));
         }
     }
 
@@ -53,24 +54,26 @@ class MainLayout
      */
     public static function addFooterScript(string ...$scripts): void
     {
-        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
-        $callerClass = $trace[1]['class'] ?? 'Unknown';
+        $callerClass = null;
 
         foreach ($scripts as $script) {
             $scriptKey = md5(trim($script));
 
-            if (strpos($script, '<script') !== false) {
-                $taggedScript = "<!-- class:" . $callerClass . " -->\n" . $script;
-                if (!isset(self::$processedScripts[$scriptKey])) {
-                    self::$footerScripts->add($taggedScript);
-                    self::$processedScripts[$scriptKey] = true;
-                }
-            } else {
-                if (!isset(self::$processedScripts[$scriptKey])) {
-                    self::$footerScripts->add($script);
-                    self::$processedScripts[$scriptKey] = true;
-                }
+            if (isset(self::$processedScripts[$scriptKey])) {
+                continue;
             }
+
+            if (str_starts_with(trim($script), '<script')) {
+                if ($callerClass === null) {
+                    $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
+                    $callerClass = $trace[1]['class'] ?? 'Unknown';
+                }
+
+                $script = self::prepareFooterScript($script, $callerClass);
+            }
+
+            self::$footerScripts[] = $script;
+            self::$processedScripts[$scriptKey] = true;
         }
     }
 
@@ -84,19 +87,24 @@ class MainLayout
      */
     public static function outputHeadScripts(): string
     {
-        $headScriptsArray = self::$headScripts->values();
-        $headScriptsWithAttributes = array_map(function ($tag) {
-            if (strpos($tag, '<script') !== false) {
-                return str_replace('<script', '<script pp-dynamic-script="81D7D"', $tag);
-            } elseif (strpos($tag, '<link') !== false) {
-                return str_replace('<link', '<link pp-dynamic-link="81D7D"', $tag);
-            } elseif (strpos($tag, '<style') !== false) {
-                return str_replace('<style', '<style pp-dynamic-style="81D7D"', $tag);
-            }
-            return $tag;
-        }, $headScriptsArray);
+        return implode("\n", self::$headScripts->values());
+    }
 
-        return implode("\n", $headScriptsWithAttributes);
+    private static function prepareHeadScript(string $tag): string
+    {
+        if (strpos($tag, '<script') !== false) {
+            return str_replace('<script', '<script pp-dynamic-script="81D7D"', $tag);
+        }
+
+        if (strpos($tag, '<link') !== false) {
+            return str_replace('<link', '<link pp-dynamic-link="81D7D"', $tag);
+        }
+
+        if (strpos($tag, '<style') !== false) {
+            return str_replace('<style', '<style pp-dynamic-style="81D7D"', $tag);
+        }
+
+        return $tag;
     }
 
     /**
@@ -106,49 +114,41 @@ class MainLayout
      */
     public static function outputFooterScripts(): string
     {
-        $processed = [];
-        $componentCounter = 0;
+        return implode("\n", self::$footerScripts ?? []);
+    }
 
-        foreach (self::$footerScripts->values() as $script) {
-            if (preg_match('/<!-- class:([^\s]+) -->/', $script, $matches)) {
-                $rawClassName = $matches[1];
-                $script = preg_replace('/<!-- class:[^\s]+ -->\s*/', '', $script, 1);
+    private static function prepareFooterScript(string $script, string $callerClass): string
+    {
+        return preg_replace_callback(
+            '/<script\b([^>]*)>/i',
+            function ($matches) use ($script, $callerClass) {
+                $attrs = $matches[1];
+                $scriptHash = substr(md5($script), 0, 8);
+                $encodedClass = 's' . base_convert(
+                    sprintf('%u', crc32($callerClass . self::$footerComponentCounter . $scriptHash)),
+                    10,
+                    36
+                );
+                self::$footerComponentCounter++;
 
-                if (str_starts_with(trim($script), '<script')) {
-                    $script = preg_replace_callback(
-                        '/<script\b([^>]*)>/i',
-                        function ($m) use ($rawClassName, &$componentCounter) {
-                            $attrs = $m[1];
-                            $scriptHash = substr(md5($m[0]), 0, 8);
-                            $encodedClass = 's' . base_convert(sprintf('%u', crc32($rawClassName . $componentCounter . $scriptHash)), 10, 36);
-                            $componentCounter++;
+                $parsedAttrs = self::parseScriptAttributes($attrs);
 
-                            $parsedAttrs = self::parseScriptAttributes($attrs);
-
-                            if (!isset($parsedAttrs['pp-component'])) {
-                                $parsedAttrs['pp-component'] = $encodedClass;
-                            }
-
-                            if (!isset($parsedAttrs['type'])) {
-                                $parsedAttrs['type'] = 'text/pp';
-                            }
-
-                            $parsedAttrs = self::convertAttributesToKebabCase($parsedAttrs);
-
-                            $newAttrs = self::buildAttributesString($parsedAttrs);
-
-                            return "<script{$newAttrs}>";
-                        },
-                        $script,
-                        1
-                    );
+                if (!isset($parsedAttrs['pp-component'])) {
+                    $parsedAttrs['pp-component'] = $encodedClass;
                 }
-            }
 
-            $processed[] = $script;
-        }
+                if (!isset($parsedAttrs['type'])) {
+                    $parsedAttrs['type'] = 'text/pp';
+                }
 
-        return implode("\n", $processed);
+                $parsedAttrs = self::convertAttributesToKebabCase($parsedAttrs);
+                $newAttrs = self::buildAttributesString($parsedAttrs);
+
+                return "<script{$newAttrs}>";
+            },
+            $script,
+            1
+        ) ?? $script;
     }
 
     private static function parseScriptAttributes(string $attrString): array
@@ -244,8 +244,9 @@ class MainLayout
      */
     public static function clearFooterScripts(): void
     {
-        self::$footerScripts->clear();
+        self::$footerScripts = [];
         self::$processedScripts = [];
+        self::$footerComponentCounter = 0;
     }
 
     /**

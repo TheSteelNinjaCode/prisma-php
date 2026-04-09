@@ -62,6 +62,19 @@ var_dump($set->values());
 
 ---
 
+## Testing
+
+Install development dependencies and run the unit test suite:
+
+```bash
+composer install
+composer test
+```
+
+The initial test suite covers the core utility classes `Set`, `Rule`, and `Env`.
+
+---
+
 ## 📜 License
 
 Released under the MIT License.

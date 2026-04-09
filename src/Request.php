@@ -190,10 +190,16 @@ class Request
      */
     public static string $remoteAddr = '';
 
+    /**
+     * @var array<string, string>|null
+     */
+    private static ?array $normalizedHeaders = null;
+
     public static function init(): void
     {
         self::$params = new ArrayObject([], ArrayObject::ARRAY_AS_PROPS);
         self::$dynamicParams = new ArrayObject([], ArrayObject::ARRAY_AS_PROPS);
+        self::$normalizedHeaders = null;
 
         self::$referer = $_SERVER['HTTP_REFERER'] ?? 'Unknown';
         self::$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -267,8 +273,9 @@ class Request
      */
     private static function isWireRequest(): bool
     {
-        $headers = array_change_key_case(getallheaders(), CASE_LOWER);
-        return isset($headers['http_pp_wire_request']) && strtolower($headers['http_pp_wire_request']) === 'true';
+        $header = self::getHeaderValue('pp-wire-request');
+
+        return $header !== null && strtolower($header) === 'true';
     }
 
     /**
@@ -280,8 +287,9 @@ class Request
     {
         $serverFetchSite = $_SERVER['HTTP_SEC_FETCH_SITE'] ?? '';
         if (isset($serverFetchSite) && $serverFetchSite === 'same-origin') {
-            $headers = array_change_key_case(getallheaders(), CASE_LOWER);
-            return isset($headers['http_pp_x_file_request']) && $headers['http_pp_x_file_request'] === 'true';
+            $header = self::getHeaderValue('pp-x-file-request');
+
+            return $header !== null && strtolower($header) === 'true';
         }
 
         return false;
@@ -387,7 +395,7 @@ class Request
         return (
             (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ||
             (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') ||
-            ($_SERVER['SERVER_PORT'] == 443)
+            ((int) ($_SERVER['SERVER_PORT'] ?? 80) === 443)
         ) ? "https://" : "http://";
     }
 
@@ -396,14 +404,83 @@ class Request
      */
     public static function getBearerToken(): ?string
     {
-        $headers = array_change_key_case(getallheaders(), CASE_LOWER);
-        $authHeader = $headers['authorization'] ?? $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? null;
+        $authHeader = self::getHeaderValue('authorization')
+            ?? $_SERVER['HTTP_AUTHORIZATION']
+            ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
+            ?? null;
 
         if ($authHeader && preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
             return $matches[1];
         }
 
         return null;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private static function getNormalizedHeaders(): array
+    {
+        if (self::$normalizedHeaders !== null) {
+            return self::$normalizedHeaders;
+        }
+
+        $headers = [];
+
+        if (function_exists('getallheaders')) {
+            $rawHeaders = getallheaders();
+
+            if (is_array($rawHeaders)) {
+                foreach ($rawHeaders as $name => $value) {
+                    if (!is_string($value)) {
+                        continue;
+                    }
+
+                    self::storeNormalizedHeader($headers, (string) $name, $value);
+                }
+            }
+        }
+
+        foreach ($_SERVER as $name => $value) {
+            if (!is_string($value)) {
+                continue;
+            }
+
+            if (str_starts_with($name, 'HTTP_')) {
+                $headerName = substr($name, 5);
+            } elseif (in_array($name, ['CONTENT_TYPE', 'CONTENT_LENGTH', 'CONTENT_MD5', 'AUTHORIZATION'], true)) {
+                $headerName = $name;
+            } else {
+                continue;
+            }
+
+            self::storeNormalizedHeader($headers, $headerName, $value);
+        }
+
+        self::$normalizedHeaders = $headers;
+
+        return self::$normalizedHeaders;
+    }
+
+    private static function getHeaderValue(string $name): ?string
+    {
+        $headers = self::getNormalizedHeaders();
+        $hyphenatedName = strtolower(str_replace('_', '-', $name));
+        $underscoredName = str_replace('-', '_', $hyphenatedName);
+
+        return $headers[$hyphenatedName] ?? $headers[$underscoredName] ?? null;
+    }
+
+    /**
+     * @param array<string, string> $headers
+     */
+    private static function storeNormalizedHeader(array &$headers, string $name, string $value): void
+    {
+        $hyphenatedName = strtolower(str_replace('_', '-', $name));
+        $underscoredName = str_replace('-', '_', $hyphenatedName);
+
+        $headers[$hyphenatedName] = $value;
+        $headers[$underscoredName] = $value;
     }
 
     /**

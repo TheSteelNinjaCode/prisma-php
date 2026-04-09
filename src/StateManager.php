@@ -15,11 +15,20 @@ class StateManager
 
     public static function init(): void
     {
-        self::loadState();
-
         if (!Request::$isWire) {
-            self::resetState();
+            $hadState = self::$state !== [] || isset($_SESSION[self::APP_STATE]);
+
+            self::$state = [];
+            unset($_SESSION[self::APP_STATE]);
+
+            if ($hadState) {
+                self::notifyListeners();
+            }
+
+            return;
         }
+
+        self::loadState();
     }
 
     /**
@@ -85,12 +94,19 @@ class StateManager
      */
     public static function loadState(): void
     {
-        if (isset($_SESSION[self::APP_STATE])) {
-            $loadedState = json_decode($_SESSION[self::APP_STATE], true, 512, JSON_THROW_ON_ERROR);
-            if (is_array($loadedState)) {
-                self::$state = $loadedState;
+        if (!isset($_SESSION[self::APP_STATE])) {
+            if (self::$state !== []) {
+                self::$state = [];
                 self::notifyListeners();
             }
+
+            return;
+        }
+
+        $loadedState = json_decode($_SESSION[self::APP_STATE], true, 512, JSON_THROW_ON_ERROR);
+        if (is_array($loadedState)) {
+            self::$state = $loadedState;
+            self::notifyListeners();
         }
     }
 

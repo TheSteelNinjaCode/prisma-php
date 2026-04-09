@@ -18,6 +18,15 @@ final class ImportComponent
     /** @var array<string, array{path:string, html:string, props:array<string,mixed>}> */
     private static array $sections = [];
 
+    /** @var array<string, array{mtime:int, source:string, hasAttributes:bool, hasNamedFunctions:bool}> */
+    private static array $preparedSourceCache = [];
+
+    /** @var array<string, int> */
+    private static array $registeredExposedComponentMtims = [];
+
+    /** @var array<string, array{mtime:int, runner:string}> */
+    private static array $compiledRunnerCache = [];
+
     /**
      * Render a PHP component file by executing it in an isolated namespace,
      * then inject pp-component + props into the rendered root element.
@@ -66,20 +75,36 @@ final class ImportComponent
 
     private static function executePhpComponentIsolated(string $filePath, array $props): string
     {
-        $source = @file_get_contents($filePath);
-        if ($source === false) {
-            throw new RuntimeException("Unable to read component file: {$filePath}");
+        $preparedSource = self::getPreparedSource($filePath);
+        $compiledRunner = self::getCompiledRunner($filePath, $preparedSource);
+
+        if ($compiledRunner !== null) {
+            try {
+                return $compiledRunner($props);
+            } catch (Throwable $e) {
+                throw new RuntimeException(
+                    "Component execution failed for {$filePath}: " . $e->getMessage(),
+                    previous: $e
+                );
+            }
         }
 
-        $source = self::stripPhpOpenTag($source);
-        $source = self::stripLeadingDeclareStrictTypes($source);
+        $source = $preparedSource['source'];
+        $shouldInspectNewFunctions = $preparedSource['hasAttributes']
+            && self::shouldRegisterExposedFunctions($filePath, $preparedSource['mtime']);
 
         $ns = 'PP\\ComponentSandbox\\C' . str_replace('.', '_', uniqid('', true));
 
-        $runner = static function (string $__code, array $__props, string $__ns, string $__filePath): string {
+        $runner = static function (
+            string $__code,
+            array $__props,
+            string $__ns,
+            string $__filePath,
+            bool $__shouldInspectNewFunctions
+        ): string {
             extract($__props, EXTR_SKIP);
 
-            $beforeFns = get_defined_functions()['user'];
+            $beforeFns = $__shouldInspectNewFunctions ? get_defined_functions()['user'] : [];
 
             ob_start();
             try {
@@ -93,29 +118,196 @@ final class ImportComponent
                 );
             }
 
-            $afterFns = get_defined_functions()['user'];
-            $newFns   = array_values(array_diff($afterFns, $beforeFns));
+            if ($__shouldInspectNewFunctions) {
+                $afterFns = get_defined_functions()['user'];
+                $newFns = array_values(array_diff($afterFns, $beforeFns));
 
-            foreach ($newFns as $fn) {
-                try {
-                    $ref   = new ReflectionFunction($fn);
-                    $attrs = $ref->getAttributes(Exposed::class);
-                    if (!$attrs) continue;
+                foreach ($newFns as $fn) {
+                    try {
+                        $ref   = new ReflectionFunction($fn);
+                        $attrs = $ref->getAttributes(Exposed::class);
+                        if (!$attrs) {
+                            continue;
+                        }
 
-                    $short = $ref->getShortName();
+                        $short = $ref->getShortName();
 
-                    if ($ref->getNamespaceName() !== $__ns) continue;
+                        if ($ref->getNamespaceName() !== $__ns) {
+                            continue;
+                        }
 
-                    ExposedRegistry::registerFunction($short, $ref->getName());
-                } catch (Throwable) {
-                    // ignore
+                        ExposedRegistry::registerFunction($short, $ref->getName());
+                    } catch (Throwable) {
+                        // ignore
+                    }
                 }
             }
 
             return (string) ob_get_clean();
         };
 
-        return $runner($source, $props, $ns, $filePath);
+        $html = $runner($source, $props, $ns, $filePath, $shouldInspectNewFunctions);
+
+        if ($shouldInspectNewFunctions) {
+            self::$registeredExposedComponentMtims[$filePath] = $preparedSource['mtime'];
+        }
+
+        return $html;
+    }
+
+    /**
+     * @return array{mtime:int, source:string, hasAttributes:bool, hasNamedFunctions:bool}
+     */
+    private static function getPreparedSource(string $filePath): array
+    {
+        $mtime = (int) (filemtime($filePath) ?: 0);
+        $cached = self::$preparedSourceCache[$filePath] ?? null;
+
+        if ($cached !== null && $cached['mtime'] === $mtime) {
+            return $cached;
+        }
+
+        $source = @file_get_contents($filePath);
+        if ($source === false) {
+            throw new RuntimeException("Unable to read component file: {$filePath}");
+        }
+
+        $source = self::stripPhpOpenTag($source);
+        $source = self::stripLeadingDeclareStrictTypes($source);
+
+        $preparedSource = [
+            'mtime' => $mtime,
+            'source' => $source,
+            'hasAttributes' => str_contains($source, '#['),
+            'hasNamedFunctions' => self::containsNamedFunctions($source),
+        ];
+
+        self::$preparedSourceCache[$filePath] = $preparedSource;
+
+        return $preparedSource;
+    }
+
+    /**
+     * @param array{mtime:int, source:string, hasAttributes:bool, hasNamedFunctions:bool} $preparedSource
+     * @return callable(array<string, mixed>): string|null
+     */
+    private static function getCompiledRunner(string $filePath, array $preparedSource): ?callable
+    {
+        if ($preparedSource['hasNamedFunctions']) {
+            return null;
+        }
+
+        $cached = self::$compiledRunnerCache[$filePath] ?? null;
+        if (
+            $cached !== null &&
+            $cached['mtime'] === $preparedSource['mtime'] &&
+            function_exists($cached['runner'])
+        ) {
+            return $cached['runner'];
+        }
+
+        $hash = substr(hash('sha256', $filePath . '|' . $preparedSource['mtime']), 0, 24);
+        $namespace = 'PP\\ComponentSandbox\\Compiled';
+        $functionName = '__pp_component_' . $hash;
+        $runner = $namespace . '\\' . $functionName;
+
+        if (!function_exists($runner)) {
+            $compiledSource = $preparedSource['source'] . "\n";
+
+            if (!self::sourceEndsInPhpMode($preparedSource['source'])) {
+                $compiledSource .= "<?php\n";
+            }
+
+            try {
+                eval(
+                    "namespace {$namespace};\n" .
+                    'function ' . $functionName . '(array $__props): string {' . "\n" .
+                    '    extract($__props, EXTR_SKIP);' . "\n" .
+                    '    ob_start();' . "\n" .
+                    $compiledSource .
+                    '    return (string) ob_get_clean();' . "\n" .
+                    "}\n"
+                );
+            } catch (Throwable $e) {
+                throw new RuntimeException(
+                    "Component compilation failed for {$filePath}: " . $e->getMessage(),
+                    previous: $e
+                );
+            }
+        }
+
+        self::$compiledRunnerCache[$filePath] = [
+            'mtime' => $preparedSource['mtime'],
+            'runner' => $runner,
+        ];
+
+        return $runner;
+    }
+
+    private static function containsNamedFunctions(string $source): bool
+    {
+        $tokens = token_get_all("<?php\n" . $source);
+        $tokenCount = count($tokens);
+
+        for ($index = 0; $index < $tokenCount; $index++) {
+            $token = $tokens[$index];
+
+            if (!is_array($token) || $token[0] !== T_FUNCTION) {
+                continue;
+            }
+
+            $lookAhead = $index + 1;
+
+            while ($lookAhead < $tokenCount) {
+                $next = $tokens[$lookAhead];
+
+                if (is_string($next)) {
+                    if ($next === '&') {
+                        $lookAhead++;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (in_array($next[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                    $lookAhead++;
+                    continue;
+                }
+
+                return $next[0] === T_STRING;
+            }
+        }
+
+        return false;
+    }
+
+    private static function sourceEndsInPhpMode(string $source): bool
+    {
+        $tokens = token_get_all("<?php\n" . $source);
+        $inPhpMode = true;
+
+        foreach ($tokens as $token) {
+            if (!is_array($token)) {
+                continue;
+            }
+
+            if ($token[0] === T_CLOSE_TAG) {
+                $inPhpMode = false;
+                continue;
+            }
+
+            if ($token[0] === T_OPEN_TAG || $token[0] === T_OPEN_TAG_WITH_ECHO) {
+                $inPhpMode = true;
+            }
+        }
+
+        return $inPhpMode;
+    }
+
+    private static function shouldRegisterExposedFunctions(string $filePath, int $mtime): bool
+    {
+        return (self::$registeredExposedComponentMtims[$filePath] ?? null) !== $mtime;
     }
 
     private static function stripPhpOpenTag(string $source): string
