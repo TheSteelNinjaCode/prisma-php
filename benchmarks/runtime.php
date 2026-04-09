@@ -89,6 +89,13 @@ benchmark('import_component_with_exposed', 5000, static function () use ($expose
     ob_end_clean();
 });
 
+benchmark('import_component_with_exposed_register', 1000, static function () use ($exposedComponent): void {
+    resetStaticProperty(ImportComponent::class, 'registeredExposedComponentMtims', []);
+    ob_start();
+    ImportComponent::render($exposedComponent, ['message' => 'hello']);
+    ob_end_clean();
+});
+
 $footerScript = '<script dataFoo="{bar}">console.log(1)</script>';
 
 benchmark('mainlayout_footer_roundtrip', 50000, static function () use ($footerScript): void {

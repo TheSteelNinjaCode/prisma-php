@@ -20,12 +20,17 @@ final class RequestTest extends TestCase
 
         $_SESSION = [];
         PrismaPHPSettings::$localStoreKey = 'pp_test_local_store';
+        $this->setStaticProperty(Request::class, 'rawInput', '');
+        $this->setStaticProperty(Request::class, 'rawInputLoaded', false);
     }
 
     protected function tearDown(): void
     {
         $_SERVER = $this->serverBackup;
         $_SESSION = $this->sessionBackup;
+
+        $this->setStaticProperty(Request::class, 'rawInput', '');
+        $this->setStaticProperty(Request::class, 'rawInputLoaded', false);
     }
 
     public function testInitUsesNormalizedServerHeadersForWireAndAuthDetection(): void
@@ -47,5 +52,69 @@ final class RequestTest extends TestCase
         self::assertTrue(Request::$isWire);
         self::assertTrue(Request::$isXFileRequest);
         self::assertSame('token-123', Request::getBearerToken());
+    }
+
+    public function testGetLocalStorageNormalizesRequestJsonIntoSessionArray(): void
+    {
+        Request::$data = [
+            PrismaPHPSettings::$localStoreKey => '{"count":2}',
+        ];
+
+        $localStorage = $this->invokePrivateStaticMethod(Request::class, 'getLocalStorage');
+
+        self::assertSame(2, $localStorage['count']);
+        self::assertSame(['count' => 2], $_SESSION[PrismaPHPSettings::$localStoreKey]);
+    }
+
+    public function testGetLocalStorageNormalizesSessionJsonIntoArray(): void
+    {
+        Request::$data = [];
+        $_SESSION[PrismaPHPSettings::$localStoreKey] = '{"count":3}';
+
+        $localStorage = $this->invokePrivateStaticMethod(Request::class, 'getLocalStorage');
+
+        self::assertSame(3, $localStorage['count']);
+        self::assertSame(['count' => 3], $_SESSION[PrismaPHPSettings::$localStoreKey]);
+    }
+
+    public function testGetParamsUsesCachedRawInputForJsonBodies(): void
+    {
+        Request::$method = 'POST';
+        Request::$contentType = 'application/json';
+        $this->setStaticProperty(Request::class, 'rawInput', '{"name":"Ada"}');
+        $this->setStaticProperty(Request::class, 'rawInputLoaded', true);
+
+        $params = $this->invokePrivateStaticMethod(Request::class, 'getParams');
+
+        self::assertSame('Ada', $params['name']);
+        self::assertSame(['name' => 'Ada'], Request::$data);
+    }
+
+    public function testGetParamsUsesCachedRawInputForFormBodies(): void
+    {
+        Request::$method = 'POST';
+        Request::$contentType = 'application/x-www-form-urlencoded';
+        $this->setStaticProperty(Request::class, 'rawInput', 'name=Ada&role=admin');
+        $this->setStaticProperty(Request::class, 'rawInputLoaded', true);
+
+        $params = $this->invokePrivateStaticMethod(Request::class, 'getParams');
+
+        self::assertSame('Ada', $params['name']);
+        self::assertSame('admin', $params['role']);
+    }
+
+    private function invokePrivateStaticMethod(string $className, string $methodName): mixed
+    {
+        $reflection = new \ReflectionMethod($className, $methodName);
+        $reflection->setAccessible(true);
+
+        return $reflection->invoke(null);
+    }
+
+    private function setStaticProperty(string $className, string $propertyName, mixed $value): void
+    {
+        $reflection = new \ReflectionClass($className);
+        $property = $reflection->getProperty($propertyName);
+        $property->setValue($value);
     }
 }

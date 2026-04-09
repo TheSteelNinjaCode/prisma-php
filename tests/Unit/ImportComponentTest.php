@@ -65,6 +65,30 @@ PHP);
         self::assertTrue(function_exists($compiledRunnerCache[$filePath]['runner']));
     }
 
+    public function testRenderFallsBackWhenComponentUsesTopLevelImports(): void
+    {
+        $filePath = $this->createComponentFile(<<<'PHP'
+<?php
+use DateTimeImmutable;
+
+$prefix = DateTimeImmutable::createFromFormat('Y-m-d', '2024-01-01')->format('Y');
+?>
+<div><?= $prefix ?></div>
+PHP);
+
+        ob_start();
+        ImportComponent::render($filePath);
+        $output = (string) ob_get_clean();
+
+        $compiledRunnerCache = $this->getStaticProperty(ImportComponent::class, 'compiledRunnerCache');
+        $preparedSourceCache = $this->getStaticProperty(ImportComponent::class, 'preparedSourceCache');
+
+        self::assertStringContainsString('>2024</div>', $output);
+        self::assertArrayHasKey($filePath, $preparedSourceCache);
+        self::assertFalse($preparedSourceCache[$filePath]['supportsCompiledRunner']);
+        self::assertArrayNotHasKey($filePath, $compiledRunnerCache);
+    }
+
     public function testRenderCachesPreparedSourceAndStillRegistersExposedFunctions(): void
     {
         $filePath = $this->createComponentFile(<<<'PHP'
@@ -102,6 +126,7 @@ PHP);
         self::assertNotNull(ExposedRegistry::resolveFunction('ping'));
         self::assertCount(1, $preparedSourceCache);
         self::assertArrayHasKey($filePath, $preparedSourceCache);
+        self::assertSame(['ping'], $preparedSourceCache[$filePath]['exposedFunctionNames']);
         self::assertArrayHasKey($filePath, $registeredExposedComponentMtims);
     }
 

@@ -195,11 +195,16 @@ class Request
      */
     private static ?array $normalizedHeaders = null;
 
+    private static string $rawInput = '';
+    private static bool $rawInputLoaded = false;
+
     public static function init(): void
     {
         self::$params = new ArrayObject([], ArrayObject::ARRAY_AS_PROPS);
         self::$dynamicParams = new ArrayObject([], ArrayObject::ARRAY_AS_PROPS);
         self::$normalizedHeaders = null;
+        self::$rawInput = '';
+        self::$rawInputLoaded = false;
 
         self::$referer = $_SERVER['HTTP_REFERER'] ?? 'Unknown';
         self::$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -309,9 +314,11 @@ class Request
                 $params = new ArrayObject($_GET, ArrayObject::ARRAY_AS_PROPS);
                 break;
             default:
+                $rawInput = self::getRawInput();
+
                 // Handle JSON input with different variations (e.g., application/json, application/ld+json, etc.)
                 if (preg_match('#^application/(|\S+\+)json($|[ ;])#', self::$contentType)) {
-                    $jsonInput = file_get_contents('php://input');
+                    $jsonInput = $rawInput;
                     if ($jsonInput !== false && !empty($jsonInput)) {
                         self::$data = json_decode($jsonInput, true);
                         if (json_last_error() === JSON_ERROR_NONE) {
@@ -324,8 +331,7 @@ class Request
 
                 // Handle URL-encoded input
                 if (stripos(self::$contentType, 'application/x-www-form-urlencoded') !== false) {
-                    $rawInput = file_get_contents('php://input');
-                    if ($rawInput !== false && !empty($rawInput)) {
+                    if ($rawInput !== '') {
                         parse_str($rawInput, $parsedParams);
                         $params = new ArrayObject($parsedParams, ArrayObject::ARRAY_AS_PROPS);
                     } else {
@@ -359,10 +365,10 @@ class Request
                 $_SESSION[$sessionKey] = $data;
                 $localStorage = new ArrayObject($data, ArrayObject::ARRAY_AS_PROPS);
             } else {
-                $decodedData = json_decode($data, true);
+                $decodedData = self::decodeArrayPayload($data);
 
-                if (json_last_error() === JSON_ERROR_NONE) {
-                    $_SESSION[$sessionKey] = $data;
+                if ($decodedData !== null) {
+                    $_SESSION[$sessionKey] = $decodedData;
                     $localStorage = new ArrayObject($decodedData, ArrayObject::ARRAY_AS_PROPS);
                 } else {
                     Boom::badRequest('Invalid JSON body')->toResponse();
@@ -375,9 +381,10 @@ class Request
                 if (is_array($sessionData)) {
                     $localStorage = new ArrayObject($sessionData, ArrayObject::ARRAY_AS_PROPS);
                 } else {
-                    $decodedData = json_decode($sessionData, true);
+                    $decodedData = self::decodeArrayPayload($sessionData);
 
-                    if (json_last_error() === JSON_ERROR_NONE) {
+                    if ($decodedData !== null) {
+                        $_SESSION[$sessionKey] = $decodedData;
                         $localStorage = new ArrayObject($decodedData, ArrayObject::ARRAY_AS_PROPS);
                     }
                 }
@@ -385,6 +392,30 @@ class Request
         }
 
         return $localStorage;
+    }
+
+    private static function getRawInput(): string
+    {
+        if (!self::$rawInputLoaded) {
+            $rawInput = file_get_contents('php://input');
+            self::$rawInput = is_string($rawInput) ? $rawInput : '';
+            self::$rawInputLoaded = true;
+        }
+
+        return self::$rawInput;
+    }
+
+    private static function decodeArrayPayload(mixed $payload): ?array
+    {
+        if (!is_string($payload)) {
+            return null;
+        }
+
+        $decodedData = json_decode($payload, true);
+
+        return is_array($decodedData) && json_last_error() === JSON_ERROR_NONE
+            ? $decodedData
+            : null;
     }
 
     /**
