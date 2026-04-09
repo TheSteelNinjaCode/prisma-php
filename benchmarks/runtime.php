@@ -77,6 +77,18 @@ benchmark('template_compile_hot_cache', 100000, static function () use ($templat
     TemplateCompiler::compile($template);
 });
 
+$compileComponentHtml = new ReflectionMethod(TemplateCompiler::class, 'compileComponentHtml');
+$compileComponentHtml->setAccessible(true);
+
+benchmark('template_compile_component_html', 20000, static function () use ($compileComponentHtml): void {
+    $compileComponentHtml->invoke(
+        null,
+        '<button dataFoo="{bar}"></button>',
+        's1',
+        ['dataBar' => '{baz}', 'title' => 'Save']
+    );
+});
+
 benchmark('import_component_plain', 5000, static function () use ($plainComponent): void {
     ob_start();
     ImportComponent::render($plainComponent, ['message' => 'hello']);

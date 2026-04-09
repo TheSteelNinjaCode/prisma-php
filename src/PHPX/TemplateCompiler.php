@@ -787,12 +787,16 @@ class TemplateCompiler
         $html = self::preprocessFragmentSyntax($html);
         $fragDom = self::convertToXml($html);
 
-        self::normalizeComponentAttributes($fragDom);
+        if (self::mightHaveDynamicCamelAttributes($html)) {
+            self::normalizeComponentAttributes($fragDom);
+        }
 
-        $hasEventListeners = self::hasEventListeners($incomingProps);
-        $eventListeners = self::getEventListeners($incomingProps);
-        $regularProps = self::getRegularProps($incomingProps);
-        $existingAttributes = self::getAllExistingAttributes($fragDom);
+        ['regularProps' => $regularProps, 'eventListeners' => $eventListeners] = self::partitionComponentProps($incomingProps);
+        $hasRegularProps = $regularProps !== [];
+        $hasEventListeners = $eventListeners !== [];
+        $existingAttributes = ($hasRegularProps || $hasEventListeners)
+            ? self::getAllExistingAttributes($fragDom)
+            : [];
 
         $needsScope = false;
         $rootElement = null;
@@ -819,7 +823,6 @@ class TemplateCompiler
                     $child->setAttribute($attrName, $propValue);
                 }
 
-                $hasRegularProps = !empty($regularProps);
                 if (!empty($parentContext) && ($hasRegularProps || $hasEventListeners)) {
                     $needsScope = true;
                 }
@@ -924,6 +927,12 @@ class TemplateCompiler
         }
     }
 
+    private static function mightHaveDynamicCamelAttributes(string $html): bool
+    {
+        return str_contains($html, '{')
+            && preg_match('/\s[a-z][\w:-]*[A-Z][\w:-]*\s*=/', $html) === 1;
+    }
+
     private static function normalizeComponentAttributes(DOMDocument $dom): void
     {
         $xpath = new DOMXPath($dom);
@@ -991,40 +1000,32 @@ class TemplateCompiler
         return str_contains($value, '{') && str_contains($value, '}');
     }
 
-    private static function getRegularProps(array $props): array
+    /**
+     * @return array{regularProps: array<string, mixed>, eventListeners: array<string, mixed>}
+     */
+    private static function partitionComponentProps(array $props): array
     {
         $regularProps = [];
+        $eventListeners = [];
+
         foreach ($props as $key => $value) {
+            if (str_starts_with(strtolower($key), 'on') && strlen($key) > 2) {
+                $eventListeners[$key] = $value;
+                continue;
+            }
+
             if (
                 !isset(self::SYSTEM_PROPS[$key]) &&
-                $key !== 'children' &&
-                !(str_starts_with(strtolower($key), 'on') && strlen($key) > 2)
+                $key !== 'children'
             ) {
                 $regularProps[$key] = $value;
             }
         }
-        return $regularProps;
-    }
 
-    private static function hasEventListeners(array $props): bool
-    {
-        foreach ($props as $key => $value) {
-            if (str_starts_with(strtolower($key), 'on') && strlen($key) > 2) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static function getEventListeners(array $props): array
-    {
-        $eventListeners = [];
-        foreach ($props as $key => $value) {
-            if (str_starts_with(strtolower($key), 'on') && strlen($key) > 2) {
-                $eventListeners[$key] = $value;
-            }
-        }
-        return $eventListeners;
+        return [
+            'regularProps' => $regularProps,
+            'eventListeners' => $eventListeners,
+        ];
     }
 
     private static function needsRecompilation(string $html): bool

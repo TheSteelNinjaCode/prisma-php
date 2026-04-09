@@ -62,6 +62,20 @@ final class TemplateCompilerTest extends TestCase
         self::assertArrayHasKey('children', $reflection['allowedProps']);
     }
 
+    public function testCompileComponentHtmlNormalizesDynamicAttributesAndInjectsProps(): void
+    {
+        $method = new \ReflectionMethod(TemplateCompiler::class, 'compileComponentHtml');
+        $method->setAccessible(true);
+
+        $html = '<button dataFoo="{bar}"></button>';
+        $output = $method->invoke(null, $html, 's1', ['dataBar' => '{baz}', 'title' => 'Save']);
+
+        self::assertStringContainsString('pp-component="s1"', $output);
+        self::assertStringContainsString('data-foo="{bar}"', $output);
+        self::assertStringContainsString('data-bar="{baz}"', $output);
+        self::assertStringContainsString('title="Save"', $output);
+    }
+
     private function getStaticProperty(string $className, string $propertyName): mixed
     {
         $reflection = new \ReflectionClass($className);
