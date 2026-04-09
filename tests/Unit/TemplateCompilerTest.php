@@ -102,6 +102,20 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringContainsString('<button on-click="{skip}"></button>', $output);
     }
 
+    public function testCompileComponentHtmlStillFindsDescendantAttributesInsideWrappedEventSubtree(): void
+    {
+        $method = new \ReflectionMethod(TemplateCompiler::class, 'compileComponentHtml');
+        $method->setAccessible(true);
+
+        $html = '<div><button onClick="{save}"><span title="child"></span></button></div>';
+        $output = $method->invoke(null, $html, 's1', ['title' => 'Root', 'onClick' => '{save}'], 'parent');
+
+        self::assertSame(1, substr_count($output, 'title="'));
+        self::assertStringNotContainsString('<div pp-component="s1" title="Root">', $output);
+        self::assertStringContainsString('<span title="child"></span>', $output);
+        self::assertStringContainsString('<template pp-owner="parent"><button on-click="{save}">', $output);
+    }
+
     private function getStaticProperty(string $className, string $propertyName): mixed
     {
         $reflection = new \ReflectionClass($className);

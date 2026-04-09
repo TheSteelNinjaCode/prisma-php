@@ -18,7 +18,6 @@ use ReflectionClass;
 use ReflectionProperty;
 use ReflectionNamedType;
 use PP\PHPX\Exceptions\ComponentValidationException;
-use DOMXPath;
 use InvalidArgumentException;
 
 class TemplateCompiler
@@ -586,25 +585,6 @@ class TemplateCompiler
         return '<template pp-owner="' . $owner . '">' . "\n" . $trimmed . "\n" . '</template>';
     }
 
-    private static function hasOwnerTemplateAncestor(DOMNode $node): bool
-    {
-        $current = $node->parentNode;
-
-        while ($current instanceof DOMNode) {
-            if (
-                $current instanceof DOMElement &&
-                strtolower($current->tagName) === 'template' &&
-                $current->hasAttribute('pp-owner')
-            ) {
-                return true;
-            }
-
-            $current = $current->parentNode;
-        }
-
-        return false;
-    }
-
     private static function wrapElementWithOwnerTemplate(DOMElement $element, string $owner): void
     {
         $parent = $element->parentNode;
@@ -786,10 +766,7 @@ class TemplateCompiler
     ): string {
         $html = self::preprocessFragmentSyntax($html);
         $fragDom = self::convertToXml($html);
-
-        if (self::mightHaveDynamicCamelAttributes($html)) {
-            self::normalizeComponentAttributes($fragDom);
-        }
+        $normalizeDynamicAttributes = self::mightHaveDynamicCamelAttributes($html);
 
         ['regularProps' => $regularProps, 'eventListeners' => $eventListeners] = self::partitionComponentProps($incomingProps);
         $hasRegularProps = $regularProps !== [];
@@ -797,9 +774,20 @@ class TemplateCompiler
         $relevantAttributes = ($hasRegularProps || $hasEventListeners)
             ? self::collectRelevantAttributeNames($regularProps, $eventListeners)
             : [];
-        $existingAttributes = $relevantAttributes !== []
-            ? self::getRelevantExistingAttributes($fragDom->documentElement, $relevantAttributes)
+        $scopedEventAttributes = ($hasEventListeners && !empty($parentContext))
+            ? self::buildScopedEventAttributeMap($eventListeners)
             : [];
+        [
+            'existingAttributes' => $existingAttributes,
+            'eventElementsToWrap' => $eventElementsToWrap,
+        ] = ($relevantAttributes !== [] || $scopedEventAttributes !== [])
+            ? self::analyzeComponentTree(
+                $fragDom->documentElement,
+                $relevantAttributes,
+                $scopedEventAttributes,
+                $normalizeDynamicAttributes
+            )
+            : ['existingAttributes' => [], 'eventElementsToWrap' => []];
 
         $needsScope = false;
         $rootElement = null;
@@ -857,12 +845,10 @@ class TemplateCompiler
             }
         }
 
-        if ($hasEventListeners && !empty($parentContext)) {
-            self::wrapEventElementsWithScope(
-                $fragDom,
-                $eventListeners,
-                $parentContext
-            );
+        if ($eventElementsToWrap !== []) {
+            foreach ($eventElementsToWrap as $elementToWrap) {
+                self::wrapElementWithOwnerTemplate($elementToWrap, $parentContext);
+            }
         }
 
         $htmlOut = self::innerXml($fragDom);
@@ -878,24 +864,6 @@ class TemplateCompiler
         }
 
         return $htmlOut;
-    }
-
-    private static function wrapEventElementsWithScope(
-        DOMDocument $fragDom,
-        array $eventListeners,
-        string $parentContext
-    ): void {
-        $scopedEventAttributes = self::buildScopedEventAttributeMap($eventListeners);
-
-        if ($scopedEventAttributes === []) {
-            return;
-        }
-
-        self::wrapEventElementsWithScopeNode(
-            $fragDom->documentElement,
-            $scopedEventAttributes,
-            $parentContext
-        );
     }
 
     /**
@@ -918,54 +886,91 @@ class TemplateCompiler
     }
 
     /**
+     * @param array<string, true> $targetAttributes
      * @param array<string, array<string, true>> $scopedEventAttributes
+     * @return array{existingAttributes: array<string, true>, eventElementsToWrap: list<DOMElement>}
      */
-    private static function wrapEventElementsWithScopeNode(
+    private static function analyzeComponentTree(
         ?DOMNode $node,
+        array $targetAttributes,
         array $scopedEventAttributes,
-        string $parentContext,
+        bool $normalizeDynamicAttributes,
+        array &$foundAttributes = [],
+        array &$eventElementsToWrap = [],
         bool $insideOwnerTemplate = false
-    ): void {
+    ): array {
         if (!$node) {
-            return;
+            return [
+                'existingAttributes' => $foundAttributes,
+                'eventElementsToWrap' => $eventElementsToWrap,
+            ];
         }
 
-        if (
-            $node instanceof DOMElement &&
-            !$insideOwnerTemplate &&
-            self::matchesScopedEventListener($node, $scopedEventAttributes)
-        ) {
-            self::wrapElementWithOwnerTemplate($node, $parentContext);
-            return;
+        $allowEventWrapping = !$insideOwnerTemplate;
+
+        if ($node instanceof DOMElement) {
+            $matchesScopedEventListener = false;
+            $attributesToRename = [];
+
+            foreach ($node->attributes as $attribute) {
+                $attributeName = $attribute->name;
+                $attributeValue = $attribute->value;
+
+                if ($normalizeDynamicAttributes && self::containsMustacheSyntax($attributeValue)) {
+                    $kebabName = self::camelToKebab($attributeName);
+
+                    if ($kebabName !== $attributeName) {
+                        $attributesToRename[$attributeName] = [
+                            'kebabName' => $kebabName,
+                            'value' => $attributeValue,
+                        ];
+                        $attributeName = $kebabName;
+                    }
+                }
+
+                if (isset($targetAttributes[$attributeName])) {
+                    $foundAttributes[$attributeName] = true;
+                }
+
+                if (
+                    $allowEventWrapping &&
+                    !$matchesScopedEventListener &&
+                    isset($scopedEventAttributes[$attributeName][$attributeValue])
+                ) {
+                    $matchesScopedEventListener = true;
+                }
+            }
+
+            foreach ($attributesToRename as $oldName => $renameInfo) {
+                $node->removeAttribute($oldName);
+                $node->setAttribute($renameInfo['kebabName'], $renameInfo['value']);
+            }
+
+            if ($matchesScopedEventListener) {
+                $eventElementsToWrap[] = $node;
+                $allowEventWrapping = false;
+            }
         }
 
         $insideOwnerTemplate = $insideOwnerTemplate || self::isOwnerTemplateElement($node);
 
         for ($child = $node->firstChild; $child !== null; $child = $nextSibling) {
             $nextSibling = $child->nextSibling;
-            self::wrapEventElementsWithScopeNode(
+            self::analyzeComponentTree(
                 $child,
+                $targetAttributes,
                 $scopedEventAttributes,
-                $parentContext,
+                $normalizeDynamicAttributes,
+                $foundAttributes,
+                $eventElementsToWrap,
                 $insideOwnerTemplate
             );
         }
-    }
 
-    /**
-     * @param array<string, array<string, true>> $scopedEventAttributes
-     */
-    private static function matchesScopedEventListener(
-        DOMElement $element,
-        array $scopedEventAttributes
-    ): bool {
-        foreach ($element->attributes as $attribute) {
-            if (isset($scopedEventAttributes[$attribute->name][$attribute->value])) {
-                return true;
-            }
-        }
-
-        return false;
+        return [
+            'existingAttributes' => $foundAttributes,
+            'eventElementsToWrap' => $eventElementsToWrap,
+        ];
     }
 
     private static function isOwnerTemplateElement(DOMNode $node): bool
@@ -979,48 +984,6 @@ class TemplateCompiler
     {
         return str_contains($html, '{')
             && preg_match('/\s[a-z][\w:-]*[A-Z][\w:-]*\s*=/', $html) === 1;
-    }
-
-    private static function normalizeComponentAttributes(DOMDocument $dom): void
-    {
-        self::normalizeComponentAttributesNode($dom->documentElement);
-    }
-
-    private static function normalizeComponentAttributesNode(?DOMNode $node): void
-    {
-        if (!$node) {
-            return;
-        }
-
-        if ($node instanceof DOMElement) {
-            $attributesToRename = [];
-
-            foreach ($node->attributes as $attr) {
-                $attrName = $attr->name;
-                $value = $attr->value;
-
-                if (!self::containsMustacheSyntax($value)) {
-                    continue;
-                }
-
-                $kebabName = self::camelToKebab($attrName);
-                if ($kebabName !== $attrName) {
-                    $attributesToRename[$attrName] = [
-                        'kebabName' => $kebabName,
-                        'value' => $value,
-                    ];
-                }
-            }
-
-            foreach ($attributesToRename as $oldName => $info) {
-                $node->removeAttribute($oldName);
-                $node->setAttribute($info['kebabName'], $info['value']);
-            }
-        }
-
-        foreach ($node->childNodes as $child) {
-            self::normalizeComponentAttributesNode($child);
-        }
     }
 
     /**
@@ -1043,43 +1006,6 @@ class TemplateCompiler
         }
 
         return $relevantAttributes;
-    }
-
-    /**
-     * @param array<string, true> $targetAttributes
-     * @param array<string, true> $foundAttributes
-     * @return array<string, true>
-     */
-    private static function getRelevantExistingAttributes(
-        ?DOMNode $node,
-        array $targetAttributes,
-        array &$foundAttributes = []
-    ): array {
-        if (!$node || $foundAttributes === $targetAttributes) {
-            return $foundAttributes;
-        }
-
-        if ($node instanceof DOMElement) {
-            foreach ($node->attributes as $attr) {
-                if (isset($targetAttributes[$attr->name])) {
-                    $foundAttributes[$attr->name] = true;
-
-                    if ($foundAttributes === $targetAttributes) {
-                        return $foundAttributes;
-                    }
-                }
-            }
-        }
-
-        foreach ($node->childNodes as $child) {
-            self::getRelevantExistingAttributes($child, $targetAttributes, $foundAttributes);
-
-            if ($foundAttributes === $targetAttributes) {
-                break;
-            }
-        }
-
-        return $foundAttributes;
     }
 
     /**
@@ -1127,12 +1053,20 @@ class TemplateCompiler
 
     private static function needsRecompilation(string $html): bool
     {
-        return preg_match(self::COMPONENT_TAG_REGEX, $html) === 1 ||
-            stripos($html, '<script') !== false;
+        if (stripos($html, '<script') !== false) {
+            return true;
+        }
+
+        return strpbrk($html, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') !== false
+            && preg_match(self::COMPONENT_TAG_REGEX, $html) === 1;
     }
 
     private static function normalizeSelfClosingTags(string $html): string
     {
+        if (!str_contains($html, '/>')) {
+            return $html;
+        }
+
         return preg_replace_callback(
             self::SELF_CLOSING_REGEX,
             static fn($m) => isset(self::SELF_CLOSING_TAGS[strtolower($m[1])])
@@ -1357,12 +1291,18 @@ class TemplateCompiler
             $node = $node->documentElement;
         }
 
-        $parts = [];
-        foreach ($node->childNodes as $child) {
-            $parts[] = $node->ownerDocument->saveXML($child);
+        if (!$node || !$node->hasChildNodes()) {
+            return '';
         }
 
-        return implode('', $parts);
+        $document = $node instanceof DOMDocument ? $node : $node->ownerDocument;
+        $xml = '';
+
+        foreach ($node->childNodes as $child) {
+            $xml .= $document->saveXML($child);
+        }
+
+        return $xml;
     }
 
     private static function preprocessFragmentSyntax(string $content): string
