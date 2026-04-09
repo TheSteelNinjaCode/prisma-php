@@ -41,18 +41,23 @@ final class ImportComponent
         }
 
         $html = self::executePhpComponentIsolated($filePath, $props);
+        $componentId = self::componentIdFromPath($filePath);
 
         if (trim($html) === '') {
             throw new RuntimeException("Component rendered empty output: {$filePath}");
         }
 
-        $dom = TemplateCompiler::convertToXml($html);
-        $rootEl = self::getSingleRootElement($dom, $filePath);
-        $rootEl->setAttribute('pp-component', self::componentIdFromPath($filePath));
+        $newHtml = self::tryApplyRootAttributesWithoutDom($html, $componentId, $props);
 
-        self::applyAttributes($rootEl, $props);
+        if ($newHtml === null) {
+            $dom = TemplateCompiler::convertToXml($html);
+            $rootEl = self::getSingleRootElement($dom, $filePath);
+            $rootEl->setAttribute('pp-component', $componentId);
 
-        $newHtml = TemplateCompiler::innerXml($dom);
+            self::applyAttributes($rootEl, $props);
+
+            $newHtml = TemplateCompiler::innerXml($dom);
+        }
 
         self::$sections[$filePath] = [
             'path'  => $filePath,
@@ -815,20 +820,209 @@ final class ImportComponent
     /**
      * @param array<string,mixed> $props
      */
-    private static function applyAttributes(DOMElement $el, array $props): void
+    private static function tryApplyRootAttributesWithoutDom(
+        string $html,
+        string $componentId,
+        array $props
+    ): ?string {
+        if (preg_match('/\A(\s*)(.*?)(\s*)\z/s', $html, $outerMatches) !== 1) {
+            return null;
+        }
+
+        $leadingWhitespace = $outerMatches[1];
+        $trimmedHtml = $outerMatches[2];
+        $trailingWhitespace = $outerMatches[3];
+
+        if ($trimmedHtml === '' || !str_starts_with($trimmedHtml, '<')) {
+            return null;
+        }
+
+        $attributes = ['pp-component' => $componentId] + self::buildSerializedAttributes($props);
+
+        if (preg_match('/\A<([A-Za-z][\w:-]*)([^<>]*?)\s*\/>\z/s', $trimmedHtml, $matches) === 1) {
+            $injectedHtml = self::injectAttributesIntoOpeningTag(
+                $matches[1],
+                $matches[2],
+                $attributes,
+                '',
+                true
+            );
+
+            return $injectedHtml === null
+                ? null
+                : $leadingWhitespace . $injectedHtml . $trailingWhitespace;
+        }
+
+        if (preg_match('/\A<([A-Za-z][\w:-]*)([^<>]*?)>(.*)<\/\1>\z/s', $trimmedHtml, $matches) !== 1) {
+            return null;
+        }
+
+        $injectedHtml = self::injectAttributesIntoOpeningTag(
+            $matches[1],
+            $matches[2],
+            $attributes,
+            $matches[3],
+            false
+        );
+
+        return $injectedHtml === null
+            ? null
+            : $leadingWhitespace . $injectedHtml . $trailingWhitespace;
+    }
+
+    /**
+     * @param array<string, string> $attributes
+     */
+    private static function injectAttributesIntoOpeningTag(
+        string $tagName,
+        string $existingAttributes,
+        array $attributes,
+        string $innerHtml,
+        bool $selfClosing
+    ): ?string {
+        $attributeNames = self::parseHtmlAttributeNames($existingAttributes);
+
+        foreach (array_keys($attributes) as $attributeName) {
+            if (isset($attributeNames[$attributeName])) {
+                return null;
+            }
+        }
+
+        $openingTag = '<' . $tagName . rtrim($existingAttributes) . self::buildAttributeMarkup($attributes);
+
+        if ($selfClosing) {
+            return $openingTag . ' />';
+        }
+
+        return $openingTag . '>' . $innerHtml . '</' . $tagName . '>';
+    }
+
+    /**
+     * @param array<string,mixed> $props
+     * @return array<string, string>
+     */
+    private static function buildSerializedAttributes(array $props): array
     {
+        $attributes = [];
+
         foreach ($props as $key => $value) {
             if (!is_string($key) || $key === '' || $value === null) {
                 continue;
             }
 
-            $attrName  = $key;
+            $attrName = $key;
             $attrValue = self::serializePropValue($value);
 
             if (TemplateCompiler::containsMustacheSyntax($attrValue)) {
                 $attrName = TemplateCompiler::camelToKebab($attrName);
             }
 
+            $attributes[$attrName] = $attrValue;
+        }
+
+        return $attributes;
+    }
+
+    /**
+     * @param array<string, string> $attributes
+     */
+    private static function buildAttributeMarkup(array $attributes): string
+    {
+        $markup = '';
+
+        foreach ($attributes as $attributeName => $attributeValue) {
+            $markup .= ' ' . $attributeName . '="' . htmlspecialchars(
+                $attributeValue,
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            ) . '"';
+        }
+
+        return $markup;
+    }
+
+    /**
+     * @return array<string, true>
+     */
+    private static function parseHtmlAttributeNames(string $attributeSource): array
+    {
+        $attributeNames = [];
+        $length = strlen($attributeSource);
+        $index = 0;
+
+        while ($index < $length) {
+            while ($index < $length && ctype_space($attributeSource[$index])) {
+                $index++;
+            }
+
+            if ($index >= $length) {
+                break;
+            }
+
+            $nameStart = $index;
+
+            while (
+                $index < $length &&
+                !ctype_space($attributeSource[$index]) &&
+                $attributeSource[$index] !== '='
+            ) {
+                $index++;
+            }
+
+            $attributeName = substr($attributeSource, $nameStart, $index - $nameStart);
+
+            if ($attributeName !== '') {
+                $attributeNames[$attributeName] = true;
+            }
+
+            while ($index < $length && ctype_space($attributeSource[$index])) {
+                $index++;
+            }
+
+            if ($index >= $length || $attributeSource[$index] !== '=') {
+                continue;
+            }
+
+            $index++;
+
+            while ($index < $length && ctype_space($attributeSource[$index])) {
+                $index++;
+            }
+
+            if ($index >= $length) {
+                break;
+            }
+
+            $quote = $attributeSource[$index];
+
+            if ($quote === '"' || $quote === "'") {
+                $index++;
+
+                while ($index < $length && $attributeSource[$index] !== $quote) {
+                    $index++;
+                }
+
+                if ($index < $length) {
+                    $index++;
+                }
+
+                continue;
+            }
+
+            while ($index < $length && !ctype_space($attributeSource[$index])) {
+                $index++;
+            }
+        }
+
+        return $attributeNames;
+    }
+
+    /**
+     * @param array<string,mixed> $props
+     */
+    private static function applyAttributes(DOMElement $el, array $props): void
+    {
+        foreach (self::buildSerializedAttributes($props) as $attrName => $attrValue) {
             $el->setAttribute($attrName, $attrValue);
         }
     }

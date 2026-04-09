@@ -88,6 +88,20 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringContainsString('<span title="child"></span>', $output);
     }
 
+    public function testCompileComponentHtmlWrapsMatchingEventElementsOutsideExistingOwnerTemplates(): void
+    {
+        $method = new \ReflectionMethod(TemplateCompiler::class, 'compileComponentHtml');
+        $method->setAccessible(true);
+
+        $html = '<div><template pp-owner="child"><button onClick="{save}"></button></template><button onClick="{save}"></button><button onClick="{skip}"></button></div>';
+        $output = $method->invoke(null, $html, 's1', ['onClick' => '{save}'], 'parent');
+
+        self::assertSame(2, substr_count($output, 'pp-owner="parent"'));
+        self::assertSame(1, substr_count($output, 'pp-owner="child"'));
+        self::assertStringContainsString('<template pp-owner="parent"><button on-click="{save}"></button></template>', $output);
+        self::assertStringContainsString('<button on-click="{skip}"></button>', $output);
+    }
+
     private function getStaticProperty(string $className, string $propertyName): mixed
     {
         $reflection = new \ReflectionClass($className);

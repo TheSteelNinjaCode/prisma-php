@@ -90,6 +90,18 @@ benchmark('template_compile_component_html', 20000, static function () use ($com
     );
 });
 
+$scopedEventHtml = '<div><template pp-owner="child"><button onClick="{save}"></button></template><button onClick="{save}"></button><button onClick="{skip}"></button></div>';
+
+benchmark('template_compile_component_html_events', 20000, static function () use ($compileComponentHtml, $scopedEventHtml): void {
+    $compileComponentHtml->invoke(
+        null,
+        $scopedEventHtml,
+        's1',
+        ['onClick' => '{save}'],
+        'parent'
+    );
+});
+
 benchmark('import_component_plain', 5000, static function () use ($plainComponent): void {
     ob_start();
     ImportComponent::render($plainComponent, ['message' => 'hello']);

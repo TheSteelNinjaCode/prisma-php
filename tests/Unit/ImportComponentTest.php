@@ -160,6 +160,24 @@ PHP);
         self::assertArrayHasKey($filePath, $registeredExposedComponentMtims);
     }
 
+    public function testRenderFallsBackWhenRootAlreadyDefinesInjectedAttributes(): void
+    {
+        $filePath = $this->createComponentFile(<<<'PHP'
+<?php ?>
+<div pp-component="existing" message="stale"><?= $message ?></div>
+PHP);
+
+        ob_start();
+        ImportComponent::render($filePath, ['message' => 'fresh']);
+        $output = (string) ob_get_clean();
+
+        self::assertSame(1, substr_count($output, 'pp-component='));
+        self::assertSame(1, substr_count($output, 'message="'));
+        self::assertStringNotContainsString('message="stale"', $output);
+        self::assertStringContainsString('message="fresh"', $output);
+        self::assertStringContainsString('>fresh</div>', $output);
+    }
+
     private function createComponentFile(string $contents): string
     {
         $filePath = tempnam(sys_get_temp_dir(), 'pp-component-');

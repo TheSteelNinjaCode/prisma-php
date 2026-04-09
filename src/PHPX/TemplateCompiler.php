@@ -861,8 +861,7 @@ class TemplateCompiler
             self::wrapEventElementsWithScope(
                 $fragDom,
                 $eventListeners,
-                $parentContext,
-                $sectionId
+                $parentContext
             );
         }
 
@@ -884,50 +883,96 @@ class TemplateCompiler
     private static function wrapEventElementsWithScope(
         DOMDocument $fragDom,
         array $eventListeners,
-        string $parentContext,
-        string $sectionId
+        string $parentContext
     ): void {
-        $xpath = new DOMXPath($fragDom);
+        $scopedEventAttributes = self::buildScopedEventAttributeMap($eventListeners);
+
+        if ($scopedEventAttributes === []) {
+            return;
+        }
+
+        self::wrapEventElementsWithScopeNode(
+            $fragDom->documentElement,
+            $scopedEventAttributes,
+            $parentContext
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $eventListeners
+     * @return array<string, array<string, true>>
+     */
+    private static function buildScopedEventAttributeMap(array $eventListeners): array
+    {
+        $scopedEventAttributes = [];
 
         foreach ($eventListeners as $eventName => $eventHandler) {
-            $kebabEventName = self::camelToKebab($eventName);
+            $handlerValue = (string) $eventHandler;
 
-            $eventElements = $xpath->query("//*[@{$eventName} or @{$kebabEventName}]");
-
-            foreach ($eventElements as $element) {
-                if (!$element instanceof DOMElement) {
-                    continue;
-                }
-
-                $hasParentEvent = false;
-
-                if ($element->hasAttribute($eventName)) {
-                    $attrValue = $element->getAttribute($eventName);
-                    if (
-                        $attrValue === $eventHandler ||
-                        (self::containsMustacheSyntax($eventHandler) && $attrValue === $eventHandler)
-                    ) {
-                        $hasParentEvent = true;
-                    }
-                }
-
-                if (!$hasParentEvent && $element->hasAttribute($kebabEventName)) {
-                    $attrValue = $element->getAttribute($kebabEventName);
-                    if (
-                        $attrValue === $eventHandler ||
-                        (self::containsMustacheSyntax($eventHandler) && $attrValue === $eventHandler)
-                    ) {
-                        $hasParentEvent = true;
-                    }
-                }
-
-                if (!$hasParentEvent || self::hasOwnerTemplateAncestor($element)) {
-                    continue;
-                }
-
-                self::wrapElementWithOwnerTemplate($element, $parentContext);
+            foreach ([$eventName, self::camelToKebab($eventName)] as $attributeName) {
+                $scopedEventAttributes[$attributeName][$handlerValue] = true;
             }
         }
+
+        return $scopedEventAttributes;
+    }
+
+    /**
+     * @param array<string, array<string, true>> $scopedEventAttributes
+     */
+    private static function wrapEventElementsWithScopeNode(
+        ?DOMNode $node,
+        array $scopedEventAttributes,
+        string $parentContext,
+        bool $insideOwnerTemplate = false
+    ): void {
+        if (!$node) {
+            return;
+        }
+
+        if (
+            $node instanceof DOMElement &&
+            !$insideOwnerTemplate &&
+            self::matchesScopedEventListener($node, $scopedEventAttributes)
+        ) {
+            self::wrapElementWithOwnerTemplate($node, $parentContext);
+            return;
+        }
+
+        $insideOwnerTemplate = $insideOwnerTemplate || self::isOwnerTemplateElement($node);
+
+        for ($child = $node->firstChild; $child !== null; $child = $nextSibling) {
+            $nextSibling = $child->nextSibling;
+            self::wrapEventElementsWithScopeNode(
+                $child,
+                $scopedEventAttributes,
+                $parentContext,
+                $insideOwnerTemplate
+            );
+        }
+    }
+
+    /**
+     * @param array<string, array<string, true>> $scopedEventAttributes
+     */
+    private static function matchesScopedEventListener(
+        DOMElement $element,
+        array $scopedEventAttributes
+    ): bool {
+        foreach ($element->attributes as $attribute) {
+            if (isset($scopedEventAttributes[$attribute->name][$attribute->value])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function isOwnerTemplateElement(DOMNode $node): bool
+    {
+        return $node instanceof DOMElement
+            && strtolower($node->tagName) === 'template'
+            && $node->hasAttribute('pp-owner');
     }
 
     private static function mightHaveDynamicCamelAttributes(string $html): bool
