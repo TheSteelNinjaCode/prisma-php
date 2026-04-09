@@ -545,6 +545,58 @@ class TemplateCompiler
         return end(self::$contextStack) ?: 'app';
     }
 
+
+    private static function wrapHtmlWithOwnerTemplate(string $html, string $owner): string
+    {
+        $trimmed = trim($html);
+
+        if ($trimmed === '') {
+            return $trimmed;
+        }
+
+        if (preg_match("/^<template\\b[^>]*\\bpp-owner\\s*=\\s*['\"][^'\"]+['\"][^>]*>/i", $trimmed) === 1) {
+            return $trimmed;
+        }
+
+        $owner = htmlspecialchars($owner !== '' ? $owner : 'app', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        return '<template pp-owner="' . $owner . '">' . "\n" . $trimmed . "\n" . '</template>';
+    }
+
+    private static function hasOwnerTemplateAncestor(DOMNode $node): bool
+    {
+        $current = $node->parentNode;
+
+        while ($current instanceof DOMNode) {
+            if (
+                $current instanceof DOMElement &&
+                strtolower($current->tagName) === 'template' &&
+                $current->hasAttribute('pp-owner')
+            ) {
+                return true;
+            }
+
+            $current = $current->parentNode;
+        }
+
+        return false;
+    }
+
+    private static function wrapElementWithOwnerTemplate(DOMElement $element, string $owner): void
+    {
+        $parent = $element->parentNode;
+
+        if (!$parent instanceof DOMNode) {
+            return;
+        }
+
+        $template = $element->ownerDocument->createElement('template');
+        $template->setAttribute('pp-owner', $owner !== '' ? $owner : 'app');
+
+        $parent->replaceChild($template, $element);
+        $template->appendChild($element);
+    }
+
     private static function processTextNode(DOMText $node): string
     {
         $parent = strtolower($node->parentNode?->nodeName ?? '');
@@ -697,19 +749,17 @@ class TemplateCompiler
                 }
             }
 
-            if ($hasChildren) {
-                $output[] = "<!-- pp-scope:{$parentContext} -->";
-            }
-
             foreach ($node->childNodes as $child) {
                 $output[] = self::processNode($child);
             }
 
-            if ($hasChildren) {
-                $output[] = "<!-- /pp-scope -->";
+            $childrenHtml = trim(implode('', $output));
+
+            if (!$hasChildren) {
+                return $childrenHtml;
             }
 
-            return trim(implode('', $output));
+            return self::wrapHtmlWithOwnerTemplate($childrenHtml, $parentContext);
         } finally {
             self::$contextStack = $originalContextStack;
         }
@@ -809,7 +859,7 @@ class TemplateCompiler
         $htmlOut = self::innerXml($fragDom);
 
         if ($needsScope && $rootElement && !empty($parentContext)) {
-            $htmlOut = "<!-- pp-scope:{$parentContext} -->\n{$htmlOut}\n<!-- /pp-scope -->";
+            $htmlOut = self::wrapHtmlWithOwnerTemplate($htmlOut, $parentContext);
         }
 
         $htmlOut = self::normalizeSelfClosingTags($htmlOut);
@@ -835,42 +885,37 @@ class TemplateCompiler
             $eventElements = $xpath->query("//*[@{$eventName} or @{$kebabEventName}]");
 
             foreach ($eventElements as $element) {
-                if ($element instanceof DOMElement) {
-                    $hasParentEvent = false;
+                if (!$element instanceof DOMElement) {
+                    continue;
+                }
 
-                    if ($element->hasAttribute($eventName)) {
-                        $attrValue = $element->getAttribute($eventName);
-                        if (
-                            $attrValue === $eventHandler ||
-                            (self::containsMustacheSyntax($eventHandler) && $attrValue === $eventHandler)
-                        ) {
-                            $hasParentEvent = true;
-                        }
-                    }
+                $hasParentEvent = false;
 
-                    if (!$hasParentEvent && $element->hasAttribute($kebabEventName)) {
-                        $attrValue = $element->getAttribute($kebabEventName);
-                        if (
-                            $attrValue === $eventHandler ||
-                            (self::containsMustacheSyntax($eventHandler) && $attrValue === $eventHandler)
-                        ) {
-                            $hasParentEvent = true;
-                        }
-                    }
-
-                    if ($hasParentEvent) {
-                        $parent = $element->parentNode;
-                        $openComment = $element->ownerDocument->createComment(" pp-scope:{$parentContext} ");
-                        $parent->insertBefore($openComment, $element);
-                        $closeComment = $element->ownerDocument->createComment(" /pp-scope ");
-                        $nextSibling = $element->nextSibling;
-                        if ($nextSibling) {
-                            $parent->insertBefore($closeComment, $nextSibling);
-                        } else {
-                            $parent->appendChild($closeComment);
-                        }
+                if ($element->hasAttribute($eventName)) {
+                    $attrValue = $element->getAttribute($eventName);
+                    if (
+                        $attrValue === $eventHandler ||
+                        (self::containsMustacheSyntax($eventHandler) && $attrValue === $eventHandler)
+                    ) {
+                        $hasParentEvent = true;
                     }
                 }
+
+                if (!$hasParentEvent && $element->hasAttribute($kebabEventName)) {
+                    $attrValue = $element->getAttribute($kebabEventName);
+                    if (
+                        $attrValue === $eventHandler ||
+                        (self::containsMustacheSyntax($eventHandler) && $attrValue === $eventHandler)
+                    ) {
+                        $hasParentEvent = true;
+                    }
+                }
+
+                if (!$hasParentEvent || self::hasOwnerTemplateAncestor($element)) {
+                    continue;
+                }
+
+                self::wrapElementWithOwnerTemplate($element, $parentContext);
             }
         }
     }
