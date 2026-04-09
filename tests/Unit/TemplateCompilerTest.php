@@ -76,6 +76,18 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringContainsString('title="Save"', $output);
     }
 
+    public function testCompileComponentHtmlDoesNotDuplicateDescendantAttributesOnRoot(): void
+    {
+        $method = new \ReflectionMethod(TemplateCompiler::class, 'compileComponentHtml');
+        $method->setAccessible(true);
+
+        $html = '<div><span title="child"></span></div>';
+        $output = $method->invoke(null, $html, 's1', ['title' => 'Root']);
+
+        self::assertSame(1, substr_count($output, 'title="'));
+        self::assertStringContainsString('<span title="child"></span>', $output);
+    }
+
     private function getStaticProperty(string $className, string $propertyName): mixed
     {
         $reflection = new \ReflectionClass($className);

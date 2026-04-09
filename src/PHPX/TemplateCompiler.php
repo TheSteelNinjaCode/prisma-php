@@ -794,8 +794,11 @@ class TemplateCompiler
         ['regularProps' => $regularProps, 'eventListeners' => $eventListeners] = self::partitionComponentProps($incomingProps);
         $hasRegularProps = $regularProps !== [];
         $hasEventListeners = $eventListeners !== [];
-        $existingAttributes = ($hasRegularProps || $hasEventListeners)
-            ? self::getAllExistingAttributes($fragDom)
+        $relevantAttributes = ($hasRegularProps || $hasEventListeners)
+            ? self::collectRelevantAttributeNames($regularProps, $eventListeners)
+            : [];
+        $existingAttributes = $relevantAttributes !== []
+            ? self::getRelevantExistingAttributes($fragDom->documentElement, $relevantAttributes)
             : [];
 
         $needsScope = false;
@@ -935,15 +938,19 @@ class TemplateCompiler
 
     private static function normalizeComponentAttributes(DOMDocument $dom): void
     {
-        $xpath = new DOMXPath($dom);
-        $allElements = $xpath->query('//*');
+        self::normalizeComponentAttributesNode($dom->documentElement);
+    }
 
-        foreach ($allElements as $element) {
-            if (!($element instanceof DOMElement)) continue;
+    private static function normalizeComponentAttributesNode(?DOMNode $node): void
+    {
+        if (!$node) {
+            return;
+        }
 
+        if ($node instanceof DOMElement) {
             $attributesToRename = [];
 
-            foreach ($element->attributes as $attr) {
+            foreach ($node->attributes as $attr) {
                 $attrName = $attr->name;
                 $value = $attr->value;
 
@@ -955,34 +962,79 @@ class TemplateCompiler
                 if ($kebabName !== $attrName) {
                     $attributesToRename[$attrName] = [
                         'kebabName' => $kebabName,
-                        'value' => $value
+                        'value' => $value,
                     ];
                 }
             }
 
             foreach ($attributesToRename as $oldName => $info) {
-                $element->removeAttribute($oldName);
-                $element->setAttribute($info['kebabName'], $info['value']);
+                $node->removeAttribute($oldName);
+                $node->setAttribute($info['kebabName'], $info['value']);
             }
+        }
+
+        foreach ($node->childNodes as $child) {
+            self::normalizeComponentAttributesNode($child);
         }
     }
 
-    private static function getAllExistingAttributes(DOMDocument $fragDom): array
+    /**
+     * @param array<string, mixed> $regularProps
+     * @param array<string, mixed> $eventListeners
+     * @return array<string, true>
+     */
+    private static function collectRelevantAttributeNames(array $regularProps, array $eventListeners): array
     {
-        $existingAttributes = [];
+        $relevantAttributes = [];
 
-        $xpath = new DOMXPath($fragDom);
-        $allElements = $xpath->query('//*[@*]');
+        foreach (array_keys($regularProps) as $propName) {
+            $relevantAttributes[$propName] = true;
+            $relevantAttributes[self::camelToKebab($propName)] = true;
+        }
 
-        foreach ($allElements as $element) {
-            if ($element instanceof DOMElement) {
-                foreach ($element->attributes as $attr) {
-                    $existingAttributes[$attr->name] = true;
+        foreach (array_keys($eventListeners) as $eventName) {
+            $relevantAttributes[$eventName] = true;
+            $relevantAttributes[self::camelToKebab($eventName)] = true;
+        }
+
+        return $relevantAttributes;
+    }
+
+    /**
+     * @param array<string, true> $targetAttributes
+     * @param array<string, true> $foundAttributes
+     * @return array<string, true>
+     */
+    private static function getRelevantExistingAttributes(
+        ?DOMNode $node,
+        array $targetAttributes,
+        array &$foundAttributes = []
+    ): array {
+        if (!$node || $foundAttributes === $targetAttributes) {
+            return $foundAttributes;
+        }
+
+        if ($node instanceof DOMElement) {
+            foreach ($node->attributes as $attr) {
+                if (isset($targetAttributes[$attr->name])) {
+                    $foundAttributes[$attr->name] = true;
+
+                    if ($foundAttributes === $targetAttributes) {
+                        return $foundAttributes;
+                    }
                 }
             }
         }
 
-        return $existingAttributes;
+        foreach ($node->childNodes as $child) {
+            self::getRelevantExistingAttributes($child, $targetAttributes, $foundAttributes);
+
+            if ($foundAttributes === $targetAttributes) {
+                break;
+            }
+        }
+
+        return $foundAttributes;
     }
 
     /**

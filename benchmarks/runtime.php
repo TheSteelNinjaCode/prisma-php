@@ -10,6 +10,7 @@ use PP\MainLayout;
 use PP\PHPX\PHPX;
 use PP\PHPX\TemplateCompiler;
 use PP\PrismaPHPSettings;
+use PP\Request;
 use PP\Set;
 
 PrismaPHPSettings::$classLogFiles = [];
@@ -122,6 +123,27 @@ benchmark('mainlayout_head_roundtrip', 50000, static function () use ($headScrip
     MainLayout::clearHeadScripts();
     MainLayout::addHeadScript($headScript);
     MainLayout::outputHeadScripts();
+});
+
+$requestGetParams = new ReflectionMethod(Request::class, 'getParams');
+$requestGetParams->setAccessible(true);
+
+benchmark('request_get_params_json_cached', 50000, static function () use ($requestGetParams): void {
+    Request::$method = 'POST';
+    Request::$contentType = 'application/json';
+    Request::$data = null;
+    resetStaticProperty(Request::class, 'rawInput', '{"name":"Ada"}');
+    resetStaticProperty(Request::class, 'rawInputLoaded', true);
+    $requestGetParams->invoke(null);
+});
+
+benchmark('request_get_params_form_cached', 50000, static function () use ($requestGetParams): void {
+    Request::$method = 'POST';
+    Request::$contentType = 'application/x-www-form-urlencoded';
+    Request::$data = null;
+    resetStaticProperty(Request::class, 'rawInput', 'name=Ada&role=admin');
+    resetStaticProperty(Request::class, 'rawInputLoaded', true);
+    $requestGetParams->invoke(null);
 });
 
 function benchmark(string $name, int $iterations, callable $callback): void
