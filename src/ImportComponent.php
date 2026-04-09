@@ -18,7 +18,7 @@ final class ImportComponent
     /** @var array<string, array{path:string, html:string, props:array<string,mixed>}> */
     private static array $sections = [];
 
-    /** @var array<string, array{mtime:int, source:string, hasAttributes:bool, hasNamedFunctions:bool, supportsCompiledRunner:bool, exposedFunctionNames:list<string>, endsInPhpMode:bool}> */
+    /** @var array<string, array{mtime:int, source:string, hasAttributes:bool, hasNamedFunctions:bool, supportsCompiledRunner:bool, exposedFunctionNames:list<string>, endsInPhpMode:bool, compiledPrelude:string, compiledBody:string, compiledBodyEndsInPhpMode:bool}> */
     private static array $preparedSourceCache = [];
 
     /** @var array<string, int> */
@@ -77,10 +77,22 @@ final class ImportComponent
     {
         $preparedSource = self::getPreparedSource($filePath);
         $compiledRunner = self::getCompiledRunner($filePath, $preparedSource);
+        $shouldRegisterResolvedExposedFunctions = $preparedSource['exposedFunctionNames'] !== []
+            && self::shouldRegisterExposedFunctions($filePath, $preparedSource['mtime']);
 
         if ($compiledRunner !== null) {
             try {
-                return $compiledRunner($props);
+                $html = $compiledRunner($props);
+
+                if ($shouldRegisterResolvedExposedFunctions) {
+                    self::registerResolvedExposedFunctions(
+                        $preparedSource['exposedFunctionNames'],
+                        self::getCompiledNamespace($filePath, $preparedSource['mtime'])
+                    );
+                    self::$registeredExposedComponentMtims[$filePath] = $preparedSource['mtime'];
+                }
+
+                return $html;
             } catch (Throwable $e) {
                 throw new RuntimeException(
                     "Component execution failed for {$filePath}: " . $e->getMessage(),
@@ -90,8 +102,6 @@ final class ImportComponent
         }
 
         $source = $preparedSource['source'];
-        $shouldRegisterResolvedExposedFunctions = $preparedSource['exposedFunctionNames'] !== []
-            && self::shouldRegisterExposedFunctions($filePath, $preparedSource['mtime']);
         $shouldInspectNewFunctions = $preparedSource['hasAttributes']
             && $preparedSource['exposedFunctionNames'] === []
             && self::shouldRegisterExposedFunctions($filePath, $preparedSource['mtime']);
@@ -152,10 +162,7 @@ final class ImportComponent
         $html = $runner($source, $props, $ns, $filePath, $shouldInspectNewFunctions);
 
         if ($shouldRegisterResolvedExposedFunctions) {
-            foreach ($preparedSource['exposedFunctionNames'] as $functionName) {
-                ExposedRegistry::registerFunction($functionName, $ns . '\\' . $functionName);
-            }
-
+            self::registerResolvedExposedFunctions($preparedSource['exposedFunctionNames'], $ns);
             self::$registeredExposedComponentMtims[$filePath] = $preparedSource['mtime'];
         } elseif ($shouldInspectNewFunctions) {
             self::$registeredExposedComponentMtims[$filePath] = $preparedSource['mtime'];
@@ -165,7 +172,7 @@ final class ImportComponent
     }
 
     /**
-    * @return array{mtime:int, source:string, hasAttributes:bool, hasNamedFunctions:bool, supportsCompiledRunner:bool, exposedFunctionNames:list<string>, endsInPhpMode:bool}
+    * @return array{mtime:int, source:string, hasAttributes:bool, hasNamedFunctions:bool, supportsCompiledRunner:bool, exposedFunctionNames:list<string>, endsInPhpMode:bool, compiledPrelude:string, compiledBody:string, compiledBodyEndsInPhpMode:bool}
      */
     private static function getPreparedSource(string $filePath): array
     {
@@ -193,6 +200,9 @@ final class ImportComponent
             'supportsCompiledRunner' => $analysis['supportsCompiledRunner'],
             'exposedFunctionNames' => $analysis['exposedFunctionNames'],
             'endsInPhpMode' => $analysis['endsInPhpMode'],
+            'compiledPrelude' => $analysis['compiledPrelude'],
+            'compiledBody' => $analysis['compiledBody'],
+            'compiledBodyEndsInPhpMode' => $analysis['compiledBodyEndsInPhpMode'],
         ];
 
         self::$preparedSourceCache[$filePath] = $preparedSource;
@@ -201,12 +211,12 @@ final class ImportComponent
     }
 
     /**
-    * @param array{mtime:int, source:string, hasAttributes:bool, hasNamedFunctions:bool, supportsCompiledRunner:bool, exposedFunctionNames:list<string>, endsInPhpMode:bool} $preparedSource
+    * @param array{mtime:int, source:string, hasAttributes:bool, hasNamedFunctions:bool, supportsCompiledRunner:bool, exposedFunctionNames:list<string>, endsInPhpMode:bool, compiledPrelude:string, compiledBody:string, compiledBodyEndsInPhpMode:bool} $preparedSource
      * @return callable(array<string, mixed>): string|null
      */
     private static function getCompiledRunner(string $filePath, array $preparedSource): ?callable
     {
-        if ($preparedSource['hasNamedFunctions'] || !$preparedSource['supportsCompiledRunner']) {
+        if (!$preparedSource['supportsCompiledRunner']) {
             return null;
         }
 
@@ -220,20 +230,22 @@ final class ImportComponent
         }
 
         $hash = substr(hash('sha256', $filePath . '|' . $preparedSource['mtime']), 0, 24);
-        $namespace = 'PP\\ComponentSandbox\\Compiled';
-        $functionName = '__pp_component_' . $hash;
+        $namespace = self::getCompiledNamespace($filePath, $preparedSource['mtime']);
+        $functionName = '__pp_component_render';
         $runner = $namespace . '\\' . $functionName;
 
         if (!function_exists($runner)) {
-            $compiledSource = $preparedSource['source'] . "\n";
+            $compiledPrelude = $preparedSource['compiledPrelude'];
+            $compiledSource = $preparedSource['compiledBody'] . "\n";
 
-            if (!$preparedSource['endsInPhpMode']) {
+            if (!$preparedSource['compiledBodyEndsInPhpMode']) {
                 $compiledSource .= "<?php\n";
             }
 
             try {
                 eval(
                     "namespace {$namespace};\n" .
+                    $compiledPrelude .
                     'function ' . $functionName . '(array $__props): string {' . "\n" .
                     '    extract($__props, EXTR_SKIP);' . "\n" .
                     '    ob_start();' . "\n" .
@@ -257,8 +269,15 @@ final class ImportComponent
         return $runner;
     }
 
+    private static function getCompiledNamespace(string $filePath, int $mtime): string
+    {
+        $hash = substr(hash('sha256', $filePath . '|' . $mtime), 0, 24);
+
+        return 'PP\\ComponentSandbox\\Compiled\\C' . $hash;
+    }
+
     /**
-     * @return array{hasAttributes:bool, hasNamedFunctions:bool, supportsCompiledRunner:bool, exposedFunctionNames:list<string>, endsInPhpMode:bool}
+     * @return array{hasAttributes:bool, hasNamedFunctions:bool, supportsCompiledRunner:bool, exposedFunctionNames:list<string>, endsInPhpMode:bool, compiledPrelude:string, compiledBody:string, compiledBodyEndsInPhpMode:bool}
      */
     private static function analyzeSource(string $source): array
     {
@@ -267,14 +286,22 @@ final class ImportComponent
         $depth = 0;
         $imports = [];
         $pendingAttributes = [];
+        $pendingAttributeBuffer = '';
         $hasAttributes = false;
         $hasNamedFunctions = false;
         $supportsCompiledRunner = true;
         $exposedFunctionNames = [];
         $endsInPhpMode = true;
+        $compiledPrelude = '';
+        $compiledBody = '';
 
         for ($index = 0; $index < $tokenCount; $index++) {
             $token = $tokens[$index];
+            $text = self::getTokenText($token);
+
+            if ($index === 0) {
+                continue;
+            }
 
             if (is_string($token)) {
                 if ($token === '{') {
@@ -283,38 +310,89 @@ final class ImportComponent
                     $depth = max(0, $depth - 1);
                 }
 
+                if ($pendingAttributeBuffer !== '') {
+                    $pendingAttributeBuffer .= $text;
+                } else {
+                    $compiledBody .= $text;
+                }
+
                 continue;
             }
 
             if ($token[0] === T_CLOSE_TAG) {
                 $endsInPhpMode = false;
+                if ($pendingAttributeBuffer !== '') {
+                    $pendingAttributeBuffer .= $text;
+                } else {
+                    $compiledBody .= $text;
+                }
                 continue;
             }
 
             if ($token[0] === T_OPEN_TAG || $token[0] === T_OPEN_TAG_WITH_ECHO) {
                 $endsInPhpMode = true;
+                if ($pendingAttributeBuffer !== '') {
+                    $pendingAttributeBuffer .= $text;
+                } else {
+                    $compiledBody .= $text;
+                }
                 continue;
             }
 
             if ($depth !== 0) {
+                if ($pendingAttributeBuffer !== '') {
+                    $compiledBody .= $pendingAttributeBuffer;
+                    $pendingAttributeBuffer = '';
+                    $pendingAttributes = [];
+                }
+
+                $compiledBody .= $text;
                 continue;
             }
 
             if ($token[0] === T_USE) {
+                $statementIndex = $index;
+                $statementText = self::collectStatementText($tokens, $statementIndex);
                 $imports += self::parseImportedNames($tokens, $index);
-                $supportsCompiledRunner = false;
-                $pendingAttributes = [];
+                if ($pendingAttributeBuffer !== '') {
+                    $compiledBody .= $pendingAttributeBuffer;
+                    $pendingAttributeBuffer = '';
+                    $pendingAttributes = [];
+                }
+
+                $compiledPrelude .= $statementText . "\n";
                 continue;
             }
 
-            if (in_array($token[0], [T_NAMESPACE, T_CONST], true)) {
+            if ($token[0] === T_CONST) {
+                $statementIndex = $index;
+                $statementText = self::collectStatementText($tokens, $statementIndex);
+                if ($pendingAttributeBuffer !== '') {
+                    $compiledBody .= $pendingAttributeBuffer;
+                    $pendingAttributeBuffer = '';
+                    $pendingAttributes = [];
+                }
+
+                $compiledPrelude .= $statementText . "\n";
+                continue;
+            }
+
+            if (in_array($token[0], [T_NAMESPACE, T_CLASS, T_INTERFACE, T_TRAIT, T_ENUM], true)) {
                 $supportsCompiledRunner = false;
-                $pendingAttributes = [];
+                if ($pendingAttributeBuffer !== '') {
+                    $compiledBody .= $pendingAttributeBuffer;
+                    $pendingAttributeBuffer = '';
+                    $pendingAttributes = [];
+                }
+
+                $compiledBody .= $text;
                 continue;
             }
 
             if ($token[0] === T_ATTRIBUTE) {
                 $hasAttributes = true;
+                $attributeIndex = $index;
+                $pendingAttributeBuffer .= self::collectAttributeText($tokens, $attributeIndex);
                 $pendingAttributes = array_merge(
                     $pendingAttributes,
                     self::parseAttributeNames($tokens, $index)
@@ -323,9 +401,18 @@ final class ImportComponent
             }
 
             if ($token[0] !== T_FUNCTION) {
-                if (!in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                if ($pendingAttributeBuffer !== '') {
+                    if (in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                        $pendingAttributeBuffer .= $text;
+                        continue;
+                    }
+
+                    $compiledBody .= $pendingAttributeBuffer;
+                    $pendingAttributeBuffer = '';
                     $pendingAttributes = [];
                 }
+
+                $compiledBody .= $text;
 
                 continue;
             }
@@ -338,10 +425,30 @@ final class ImportComponent
                 if (self::hasExposedAttribute($pendingAttributes, $imports)) {
                     $exposedFunctionNames[] = $functionName;
                 }
+
+                $compiledPrelude .= $pendingAttributeBuffer;
+                $pendingAttributeBuffer = '';
+                $pendingAttributes = [];
+                $compiledPrelude .= self::collectFunctionText($tokens, $index) . "\n";
+
+                continue;
             }
 
-            $pendingAttributes = [];
+            if ($pendingAttributeBuffer !== '') {
+                $compiledBody .= $pendingAttributeBuffer;
+                $pendingAttributeBuffer = '';
+                $pendingAttributes = [];
+            }
+
+            $compiledBody .= $text;
         }
+
+        if ($pendingAttributeBuffer !== '') {
+            $supportsCompiledRunner = false;
+            $compiledBody .= $pendingAttributeBuffer;
+        }
+
+        $compiledBodyEndsInPhpMode = self::sourceEndsInPhpMode($compiledBody);
 
         return [
             'hasAttributes' => $hasAttributes,
@@ -349,6 +456,9 @@ final class ImportComponent
             'supportsCompiledRunner' => $supportsCompiledRunner,
             'exposedFunctionNames' => $exposedFunctionNames,
             'endsInPhpMode' => $endsInPhpMode,
+            'compiledPrelude' => $compiledPrelude,
+            'compiledBody' => $compiledBody,
+            'compiledBodyEndsInPhpMode' => $compiledBodyEndsInPhpMode,
         ];
     }
 
@@ -401,6 +511,16 @@ final class ImportComponent
         return false;
     }
 
+    /**
+     * @param list<string> $functionNames
+     */
+    private static function registerResolvedExposedFunctions(array $functionNames, string $namespace): void
+    {
+        foreach ($functionNames as $functionName) {
+            ExposedRegistry::registerFunction($functionName, $namespace . '\\' . $functionName);
+        }
+    }
+
     private static function normalizeImportAlias(string $name, ?string $alias): string
     {
         if ($alias !== null && $alias !== '') {
@@ -410,6 +530,81 @@ final class ImportComponent
         $parts = explode('\\', trim($name, '\\'));
 
         return end($parts) ?: $name;
+    }
+
+    /**
+     * @param list<mixed> $tokens
+     */
+    private static function collectStatementText(array $tokens, int &$index): string
+    {
+        $text = '';
+        $tokenCount = count($tokens);
+
+        for ($cursor = $index; $cursor < $tokenCount; $cursor++) {
+            $text .= self::getTokenText($tokens[$cursor]);
+
+            if ($tokens[$cursor] === ';') {
+                $index = $cursor;
+                break;
+            }
+        }
+
+        return $text;
+    }
+
+    /**
+     * @param list<mixed> $tokens
+     */
+    private static function collectAttributeText(array $tokens, int &$index): string
+    {
+        $text = '';
+        $tokenCount = count($tokens);
+
+        for ($cursor = $index; $cursor < $tokenCount; $cursor++) {
+            $text .= self::getTokenText($tokens[$cursor]);
+
+            if ($tokens[$cursor] === ']') {
+                $index = $cursor;
+                break;
+            }
+        }
+
+        return $text;
+    }
+
+    /**
+     * @param list<mixed> $tokens
+     */
+    private static function collectFunctionText(array $tokens, int &$index): string
+    {
+        $text = '';
+        $tokenCount = count($tokens);
+        $braceDepth = 0;
+        $startedBody = false;
+
+        for ($cursor = $index; $cursor < $tokenCount; $cursor++) {
+            $token = $tokens[$cursor];
+            $text .= self::getTokenText($token);
+
+            if ($token === '{') {
+                $braceDepth++;
+                $startedBody = true;
+            } elseif ($token === '}') {
+                $braceDepth--;
+
+                if ($startedBody && $braceDepth === 0) {
+                    $index = $cursor;
+                    break;
+                }
+            }
+        }
+
+        return $text;
+    }
+
+    private static function getTokenText(mixed $token): string
+    {
+        return is_array($token) ? $token[1] : $token;
     }
 
     /**
@@ -430,6 +625,29 @@ final class ImportComponent
         }
 
         return null;
+    }
+
+    private static function sourceEndsInPhpMode(string $source): bool
+    {
+        $tokens = token_get_all("<?php\n" . $source);
+        $inPhpMode = true;
+
+        foreach ($tokens as $token) {
+            if (!is_array($token)) {
+                continue;
+            }
+
+            if ($token[0] === T_CLOSE_TAG) {
+                $inPhpMode = false;
+                continue;
+            }
+
+            if ($token[0] === T_OPEN_TAG || $token[0] === T_OPEN_TAG_WITH_ECHO) {
+                $inPhpMode = true;
+            }
+        }
+
+        return $inPhpMode;
     }
 
     private static function isQualifiedNameToken(int $tokenId): bool

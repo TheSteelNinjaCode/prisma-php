@@ -65,13 +65,43 @@ PHP);
         self::assertTrue(function_exists($compiledRunnerCache[$filePath]['runner']));
     }
 
-    public function testRenderFallsBackWhenComponentUsesTopLevelImports(): void
+    public function testRenderSupportsCompiledRunnerWhenComponentUsesTopLevelImports(): void
     {
         $filePath = $this->createComponentFile(<<<'PHP'
 <?php
 use DateTimeImmutable;
 
 $prefix = DateTimeImmutable::createFromFormat('Y-m-d', '2024-01-01')->format('Y');
+?>
+<div><?= $prefix ?></div>
+PHP);
+
+        ob_start();
+        ImportComponent::render($filePath);
+        $output = (string) ob_get_clean();
+
+        $compiledRunnerCache = $this->getStaticProperty(ImportComponent::class, 'compiledRunnerCache');
+        $preparedSourceCache = $this->getStaticProperty(ImportComponent::class, 'preparedSourceCache');
+
+        self::assertStringContainsString('>2024</div>', $output);
+        self::assertArrayHasKey($filePath, $preparedSourceCache);
+        self::assertTrue($preparedSourceCache[$filePath]['supportsCompiledRunner']);
+        self::assertArrayHasKey($filePath, $compiledRunnerCache);
+    }
+
+    public function testRenderFallsBackWhenComponentHasTopLevelClassDeclaration(): void
+    {
+        $filePath = $this->createComponentFile(<<<'PHP'
+<?php
+class LocalHelper
+{
+    public static function year(): string
+    {
+        return '2024';
+    }
+}
+
+$prefix = LocalHelper::year();
 ?>
 <div><?= $prefix ?></div>
 PHP);
