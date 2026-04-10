@@ -278,7 +278,7 @@ class Request
      */
     private static function isWireRequest(): bool
     {
-        $header = self::getHeaderValue('pp-wire-request');
+        $header = self::getHeaderValue('http_pp_wire_request');
 
         return $header !== null && strtolower($header) === 'true';
     }
@@ -292,7 +292,7 @@ class Request
     {
         $serverFetchSite = $_SERVER['HTTP_SEC_FETCH_SITE'] ?? '';
         if (isset($serverFetchSite) && $serverFetchSite === 'same-origin') {
-            $header = self::getHeaderValue('pp-x-file-request');
+            $header = self::getHeaderValue('http_pp_x_file_request');
 
             return $header !== null && strtolower($header) === 'true';
         }
