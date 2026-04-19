@@ -105,8 +105,8 @@ class TemplateCompiler
             $leastUsed = self::findLeastUsedCacheKey();
 
             if ($leastUsed !== null) {
-            unset(self::$compiledCache[$leastUsed]);
-            unset(self::$cacheStats[$leastUsed]);
+                unset(self::$compiledCache[$leastUsed]);
+                unset(self::$cacheStats[$leastUsed]);
             }
         }
 
@@ -160,6 +160,29 @@ class TemplateCompiler
         } finally {
             self::$compileDepth--;
         }
+    }
+
+    public static function scopeRouteRoot(string $htmlContent, string $filePath): string
+    {
+        $dom = self::createDomForSingleRootValidation($htmlContent, $filePath, 'Route file');
+        $rootElement = self::getSingleRootElementForValidation($dom, $filePath, 'Route file');
+
+        if (trim($rootElement->getAttribute(self::COMPONENT_ATTRIBUTE)) !== '') {
+            return $htmlContent;
+        }
+
+        $rootElement->setAttribute(self::COMPONENT_ATTRIBUTE, self::routeComponentIdFromPath($filePath));
+
+        return self::innerXml($dom);
+    }
+
+    public static function validateSingleRootHtml(
+        string $htmlContent,
+        string $filePath,
+        string $contextLabel = 'Template'
+    ): void {
+        $dom = self::createDomForSingleRootValidation($htmlContent, $filePath, $contextLabel);
+        self::getSingleRootElementForValidation($dom, $filePath, $contextLabel);
     }
 
     public static function injectDynamicContent(string $htmlContent): string
@@ -1303,6 +1326,124 @@ class TemplateCompiler
         }
 
         return $xml;
+    }
+
+    private static function createDomForSingleRootValidation(
+        string $htmlContent,
+        string $filePath,
+        string $contextLabel
+    ): DOMDocument {
+        try {
+            return self::convertToXml($htmlContent);
+        } catch (RuntimeException $exception) {
+            throw new RuntimeException(
+                sprintf(
+                    '%s must render valid markup before single-root validation. File: %s. %s',
+                    $contextLabel,
+                    $filePath,
+                    $exception->getMessage()
+                ),
+                0,
+                $exception
+            );
+        }
+    }
+
+    private static function getSingleRootElementForValidation(
+        DOMDocument $dom,
+        string $filePath,
+        string $contextLabel
+    ): DOMElement {
+        $wrapper = $dom->documentElement;
+
+        if (!$wrapper) {
+            throw new RuntimeException(
+                sprintf('%s does not contain a valid root wrapper. File: %s', $contextLabel, $filePath)
+            );
+        }
+
+        $significantNodes = self::collectSignificantTopLevelNodes($wrapper);
+
+        if (count($significantNodes) !== 1 || !$significantNodes[0] instanceof DOMElement) {
+            $nodeSummary = self::describeTopLevelNodes($significantNodes);
+            $message = sprintf(
+                '%s must render exactly one parent HTML element, and any inline <script> must stay inside that root. File: %s',
+                $contextLabel,
+                $filePath
+            );
+
+            if ($nodeSummary !== '') {
+                $message .= '. Found: ' . $nodeSummary;
+            }
+
+            throw new RuntimeException($message);
+        }
+
+        return $significantNodes[0];
+    }
+
+    /**
+     * @return list<DOMNode>
+     */
+    private static function collectSignificantTopLevelNodes(DOMNode $wrapper): array
+    {
+        $significantNodes = [];
+
+        foreach ($wrapper->childNodes as $node) {
+            if ($node instanceof DOMComment) {
+                continue;
+            }
+
+            if ($node instanceof DOMText && trim($node->textContent) === '') {
+                continue;
+            }
+
+            $significantNodes[] = $node;
+        }
+
+        return $significantNodes;
+    }
+
+    /**
+     * @param list<DOMNode> $nodes
+     */
+    private static function describeTopLevelNodes(array $nodes): string
+    {
+        if ($nodes === []) {
+            return 'no top-level HTML element';
+        }
+
+        $descriptions = array_map(
+            static function (DOMNode $node): string {
+                if ($node instanceof DOMElement) {
+                    return '<' . strtolower($node->tagName) . '>';
+                }
+
+                if ($node instanceof DOMText) {
+                    $text = preg_replace('/\s+/', ' ', trim($node->textContent)) ?? '';
+                    $text = substr($text, 0, 40);
+
+                    if ($text === '') {
+                        return 'text';
+                    }
+
+                    return 'text("' . $text . '")';
+                }
+
+                return $node->nodeName;
+            },
+            $nodes
+        );
+
+        return implode(', ', $descriptions);
+    }
+
+    private static function routeComponentIdFromPath(string $filePath): string
+    {
+        $normalizedPath = strtolower(str_replace('\\', '/', $filePath));
+        $prefix = str_ends_with($normalizedPath, '/layout.php') ? 'layout_' : 'page_';
+
+        return $prefix . base_convert(sprintf('%u', crc32($normalizedPath)), 10, 36);
     }
 
     private static function preprocessFragmentSyntax(string $content): string
