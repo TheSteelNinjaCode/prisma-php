@@ -107,8 +107,8 @@ class TemplateCompiler
             $leastUsed = self::findLeastUsedCacheKey();
 
             if ($leastUsed !== null) {
-            unset(self::$compiledCache[$leastUsed]);
-            unset(self::$cacheStats[$leastUsed]);
+                unset(self::$compiledCache[$leastUsed]);
+                unset(self::$cacheStats[$leastUsed]);
             }
         }
 
@@ -836,6 +836,12 @@ class TemplateCompiler
         string $parentContext = ''
     ): string {
         $html = self::preprocessFragmentSyntax($html);
+        $wrapsComponentRoot = self::hasSingleTopLevelComponentRoot($html);
+
+        if ($wrapsComponentRoot) {
+            $html = '<div>' . $html . '</div>';
+        }
+
         $normalizeDynamicAttributes = self::mightHaveDynamicCamelAttributes($html);
 
         $normalizedProps = self::normalizeComponentProps($incomingProps, !empty($parentContext));
@@ -965,6 +971,14 @@ class TemplateCompiler
 
         if (self::needsRecompilation($htmlOut)) {
             $htmlOut = self::compile($htmlOut);
+        }
+
+        if (!$wrapsComponentRoot) {
+            $passthroughChildRoot = self::extractOwnedPassthroughChildRoot($htmlOut);
+
+            if ($passthroughChildRoot !== null) {
+                return $passthroughChildRoot;
+            }
         }
 
         return $htmlOut;
@@ -1874,7 +1888,8 @@ class TemplateCompiler
             return null;
         }
 
-        $tagName = strtolower($matches[1]);
+        $originalTagName = $matches[1];
+        $tagName = strtolower($originalTagName);
         if ($tagName === 'script' || $tagName === 'style') {
             return null;
         }
@@ -1891,6 +1906,7 @@ class TemplateCompiler
                 'trimmedHtml' => $trimmedHtml,
                 'trailingWhitespace' => $outerMatches[3],
                 'openingTag' => $openingTag,
+                'originalTagName' => $originalTagName,
                 'tagName' => $tagName,
                 'openingTagEnd' => $openingTagEnd,
                 'rootEnd' => $openingTagEnd,
@@ -1995,11 +2011,70 @@ class TemplateCompiler
             'trimmedHtml' => $trimmedHtml,
             'trailingWhitespace' => $outerMatches[3],
             'openingTag' => $openingTag,
+            'originalTagName' => $originalTagName,
             'tagName' => $tagName,
             'openingTagEnd' => $openingTagEnd,
             'rootEnd' => $cursor - 1,
             'selfClosing' => false,
         ];
+    }
+
+    private static function hasSingleTopLevelComponentRoot(string $htmlContent): bool
+    {
+        $analysis = self::analyzeSingleRootHtml($htmlContent);
+
+        if ($analysis === null) {
+            return false;
+        }
+
+        return preg_match('/^[A-Z]/', $analysis['originalTagName']) === 1;
+    }
+
+    private static function extractOwnedPassthroughChildRoot(string $htmlContent): ?string
+    {
+        try {
+            $fragDom = self::convertToXml($htmlContent);
+        } catch (RuntimeException) {
+            return null;
+        }
+
+        $rootElement = self::getSingleFragmentRootElement($fragDom);
+
+        if (
+            !$rootElement instanceof DOMElement ||
+            strcasecmp($rootElement->tagName, 'template') !== 0 ||
+            !$rootElement->hasAttribute('pp-owner')
+        ) {
+            return null;
+        }
+
+        $childNodes = [];
+
+        foreach ($rootElement->childNodes as $child) {
+            if ($child instanceof DOMComment) {
+                continue;
+            }
+
+            if ($child instanceof DOMText && trim($child->textContent) === '') {
+                continue;
+            }
+
+            $childNodes[] = $child;
+        }
+
+        if (count($childNodes) !== 1 || !$childNodes[0] instanceof DOMElement) {
+            return null;
+        }
+
+        $childRoot = $childNodes[0];
+
+        if (trim($childRoot->getAttribute(self::COMPONENT_ATTRIBUTE)) === '') {
+            return null;
+        }
+
+        $childRootMarkup = $childRoot->ownerDocument?->saveXML($childRoot);
+
+        return $childRootMarkup !== false ? $childRootMarkup : null;
     }
 
     private static function findHtmlTagEnd(string $html, int $start): ?int
