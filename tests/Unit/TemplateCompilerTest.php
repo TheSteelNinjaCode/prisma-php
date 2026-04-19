@@ -155,7 +155,7 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringContainsString('pp-dynamic-script="81D7D"', $output);
         self::assertStringContainsString('pp-component="', $output);
         self::assertStringContainsString('type="text/pp"', $output);
-        self::assertMatchesRegularExpression('/pp-dynamic-script="81D7D"<\/script><\/head>/i', $output);
+        self::assertMatchesRegularExpression('/<script[^>]*pp-dynamic-script="81D7D"[^>]*><\/script><\/head>/i', $output);
         self::assertMatchesRegularExpression('/type="text\/pp">console\.log\(1\)<\/script><\/body>/i', $output);
     }
 
