@@ -22,6 +22,13 @@ final class RequestTest extends TestCase
         PrismaPHPSettings::$localStoreKey = 'pp_test_local_store';
         $this->setStaticProperty(Request::class, 'rawInput', '');
         $this->setStaticProperty(Request::class, 'rawInputLoaded', false);
+        $this->setStaticProperty(Request::class, 'contentTypeInfoSource', null);
+        $this->setStaticProperty(Request::class, 'contentTypeInfo', [
+            'normalized' => '',
+            'isJson' => false,
+            'isForm' => false,
+            'isMultipart' => false,
+        ]);
     }
 
     protected function tearDown(): void
@@ -31,6 +38,13 @@ final class RequestTest extends TestCase
 
         $this->setStaticProperty(Request::class, 'rawInput', '');
         $this->setStaticProperty(Request::class, 'rawInputLoaded', false);
+        $this->setStaticProperty(Request::class, 'contentTypeInfoSource', null);
+        $this->setStaticProperty(Request::class, 'contentTypeInfo', [
+            'normalized' => '',
+            'isJson' => false,
+            'isForm' => false,
+            'isMultipart' => false,
+        ]);
     }
 
     public function testInitUsesNormalizedServerHeadersForWireAndAuthDetection(): void

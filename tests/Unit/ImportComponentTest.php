@@ -21,6 +21,8 @@ final class ImportComponentTest extends TestCase
         $this->setStaticProperty(ImportComponent::class, 'preparedSourceCache', []);
         $this->setStaticProperty(ImportComponent::class, 'registeredExposedComponentMtims', []);
         $this->setStaticProperty(ImportComponent::class, 'compiledRunnerCache', []);
+        $this->setStaticProperty(ImportComponent::class, 'componentIdCache', []);
+        $this->setStaticProperty(ImportComponent::class, 'compiledNamespaceCache', []);
         $this->setStaticProperty(ExposedRegistry::class, 'functions', []);
     }
 
@@ -36,6 +38,8 @@ final class ImportComponentTest extends TestCase
         $this->setStaticProperty(ImportComponent::class, 'preparedSourceCache', []);
         $this->setStaticProperty(ImportComponent::class, 'registeredExposedComponentMtims', []);
         $this->setStaticProperty(ImportComponent::class, 'compiledRunnerCache', []);
+        $this->setStaticProperty(ImportComponent::class, 'componentIdCache', []);
+        $this->setStaticProperty(ImportComponent::class, 'compiledNamespaceCache', []);
         $this->setStaticProperty(ExposedRegistry::class, 'functions', []);
     }
 
@@ -158,6 +162,45 @@ PHP);
         self::assertArrayHasKey($filePath, $preparedSourceCache);
         self::assertSame(['ping'], $preparedSourceCache[$filePath]['exposedFunctionNames']);
         self::assertArrayHasKey($filePath, $registeredExposedComponentMtims);
+    }
+
+    public function testRenderSkipsRedundantCompiledExposedRegistrationWhenRegistryAlreadyMatches(): void
+    {
+        $filePath = $this->createComponentFile(<<<'PHP'
+<?php
+use PP\Attributes\Exposed;
+
+#[Exposed]
+function ping(): string
+{
+    return 'pong';
+}
+?>
+<div><?= $message ?></div>
+PHP);
+
+        ob_start();
+        ImportComponent::render($filePath, ['message' => 'first']);
+        ob_end_clean();
+
+        $initialResolved = ExposedRegistry::resolveFunction('ping');
+        $this->setStaticProperty(ImportComponent::class, 'registeredExposedComponentMtims', []);
+
+        ob_start();
+        ImportComponent::render($filePath, ['message' => 'second']);
+        $secondOutput = (string) ob_get_clean();
+
+        $registeredExposedComponentMtims = $this->getStaticProperty(
+            ImportComponent::class,
+            'registeredExposedComponentMtims'
+        );
+        $compiledNamespaceCache = $this->getStaticProperty(ImportComponent::class, 'compiledNamespaceCache');
+
+        self::assertNotNull($initialResolved);
+        self::assertSame($initialResolved, ExposedRegistry::resolveFunction('ping'));
+        self::assertStringContainsString('>second</div>', $secondOutput);
+        self::assertArrayHasKey($filePath, $registeredExposedComponentMtims);
+        self::assertArrayHasKey($filePath, $compiledNamespaceCache);
     }
 
     public function testRenderFallsBackWhenRootAlreadyDefinesInjectedAttributes(): void

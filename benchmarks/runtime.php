@@ -2,7 +2,23 @@
 
 declare(strict_types=1);
 
-require dirname(__DIR__) . '/vendor/autoload.php';
+$autoloadPath = null;
+
+foreach ([
+    dirname(__DIR__) . '/vendor/autoload.php',
+    dirname(__DIR__, 4) . '/vendor/autoload.php',
+] as $candidate) {
+    if (is_file($candidate)) {
+        $autoloadPath = $candidate;
+        break;
+    }
+}
+
+if ($autoloadPath === null) {
+    throw new RuntimeException('Unable to locate Composer autoload.php for runtime benchmarks.');
+}
+
+require $autoloadPath;
 
 use PP\Attributes\ExposedRegistry;
 use PP\ImportComponent;
@@ -27,15 +43,26 @@ register_shutdown_function(static function () use (&$cleanupFiles): void {
 
 resetStaticProperty(TemplateCompiler::class, 'compiledCache', []);
 resetStaticProperty(TemplateCompiler::class, 'cacheStats', []);
+resetStaticProperty(TemplateCompiler::class, 'camelToKebabCache', []);
 resetStaticProperty(PHPX::class, 'publicPropertyTypeCache', []);
+resetStaticProperty(PHPX::class, 'publicPropertyTypeInfoCache', []);
 resetStaticProperty(ImportComponent::class, 'sections', []);
 resetStaticProperty(ImportComponent::class, 'preparedSourceCache', []);
 resetStaticProperty(ImportComponent::class, 'registeredExposedComponentMtims', []);
+resetStaticProperty(ImportComponent::class, 'compiledRunnerCache', []);
+resetStaticProperty(ImportComponent::class, 'componentIdCache', []);
+resetStaticProperty(ImportComponent::class, 'compiledNamespaceCache', []);
 resetStaticProperty(ExposedRegistry::class, 'functions', []);
 resetStaticProperty(MainLayout::class, 'headScripts', new Set());
 resetStaticProperty(MainLayout::class, 'footerScripts', []);
 resetStaticProperty(MainLayout::class, 'processedScripts', []);
 resetStaticProperty(MainLayout::class, 'footerComponentCounter', 0);
+resetStaticProperty(MainLayout::class, 'headScriptsOutputCache', null);
+resetStaticProperty(MainLayout::class, 'footerScriptsOutputCache', null);
+resetStaticProperty(MainLayout::class, 'systemPropsCache', null);
+resetStaticProperty(MainLayout::class, 'footerScriptHashCache', []);
+resetStaticProperty(MainLayout::class, 'footerScriptAttributesCache', []);
+resetStaticProperty(MainLayout::class, 'preparedHeadScriptCache', []);
 
 $plainComponent = createTempComponentFile(<<<'PHP'
 <?php ?>

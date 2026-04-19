@@ -58,6 +58,11 @@ class PrismaSettings
 class PrismaPHPSettings
 {
     /**
+     * @var array<string, array>
+     */
+    private static array $jsonFileCache = [];
+
+    /**
      * The settings from the prisma-php.json file.
      * 
      * @var PrismaSettings
@@ -111,71 +116,84 @@ class PrismaPHPSettings
     {
         $prismaPHPSettingsJson = DOCUMENT_PATH . '/prisma-php.json';
 
-        if (!file_exists($prismaPHPSettingsJson)) {
-            throw new Exception("Settings file not found: $prismaPHPSettingsJson");
-        }
-
-        $jsonContent = file_get_contents($prismaPHPSettingsJson);
-        $decodedJson = json_decode($jsonContent, true);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new Exception("Failed to decode JSON: " . json_last_error_msg());
-        }
-
-        return new PrismaSettings($decodedJson);
+        return new PrismaSettings(self::readJsonFile($prismaPHPSettingsJson, true));
     }
 
     private static function getRoutesFileList(): array
     {
-        $jsonFileName = SETTINGS_PATH . '/files-list.json';
-        if (!file_exists($jsonFileName)) {
-            return [];
-        }
-
-        $jsonContent = file_get_contents($jsonFileName);
-        if ($jsonContent === false || empty(trim($jsonContent))) {
-            return [];
-        }
-
-        $routeFiles = json_decode($jsonContent, true);
-        return is_array($routeFiles) ? $routeFiles : [];
+        return self::readJsonFile(SETTINGS_PATH . '/files-list.json');
     }
 
     private static function getClassesLogFiles(): array
     {
-        $jsonFileName = SETTINGS_PATH . '/class-imports.json';
-        if (!file_exists($jsonFileName)) {
-            return [];
-        }
-
-        $jsonContent = file_get_contents($jsonFileName);
-        if ($jsonContent === false || empty(trim($jsonContent))) {
-            return [];
-        }
-
-        $classLogFiles = json_decode($jsonContent, true);
-        return is_array($classLogFiles) ? $classLogFiles : [];
+        return self::readJsonFile(SETTINGS_PATH . '/class-imports.json');
     }
 
     private static function getIncludeFiles(): array
     {
-        $jsonFileName = SETTINGS_PATH . "/request-data.json";
-        if (!file_exists($jsonFileName)) {
-            return [];
-        }
-
-        $jsonContent = file_get_contents($jsonFileName);
-        if ($jsonContent === false || empty(trim($jsonContent))) {
-            return [];
-        }
-
-        $includeFiles = json_decode($jsonContent, true);
-        return is_array($includeFiles) ? $includeFiles : [];
+        return self::readJsonFile(SETTINGS_PATH . '/request-data.json');
     }
 
     private static function getLocalStorageKey(): string
     {
         $localStorageKey = Env::string('LOCALSTORE_KEY', 'pp_local_store_59e13');
         return strtolower(preg_replace('/\s+/', '_', trim($localStorageKey)));
+    }
+
+    /**
+     * @return array<mixed>
+     */
+    private static function readJsonFile(string $filePath, bool $throwOnInvalid = false): array
+    {
+        if (array_key_exists($filePath, self::$jsonFileCache)) {
+            return self::$jsonFileCache[$filePath];
+        }
+
+        if (!is_file($filePath)) {
+            if ($throwOnInvalid) {
+                throw new Exception("Settings file not found: $filePath");
+            }
+
+            self::$jsonFileCache[$filePath] = [];
+
+            return self::$jsonFileCache[$filePath];
+        }
+
+        $jsonContent = file_get_contents($filePath);
+        if ($jsonContent === false || trim($jsonContent) === '') {
+            if ($throwOnInvalid) {
+                throw new Exception("Failed to decode JSON: Syntax error");
+            }
+
+            self::$jsonFileCache[$filePath] = [];
+
+            return self::$jsonFileCache[$filePath];
+        }
+
+        $decodedJson = json_decode($jsonContent, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            if ($throwOnInvalid) {
+                throw new Exception('Failed to decode JSON: ' . json_last_error_msg());
+            }
+
+            self::$jsonFileCache[$filePath] = [];
+
+            return self::$jsonFileCache[$filePath];
+        }
+
+        if (!is_array($decodedJson)) {
+            if ($throwOnInvalid) {
+                throw new Exception('Failed to decode JSON: Expected a JSON object or array');
+            }
+
+            self::$jsonFileCache[$filePath] = [];
+
+            return self::$jsonFileCache[$filePath];
+        }
+
+        self::$jsonFileCache[$filePath] = $decodedJson;
+
+        return self::$jsonFileCache[$filePath];
     }
 }

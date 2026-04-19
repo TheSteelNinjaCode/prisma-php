@@ -27,6 +27,12 @@ final class ImportComponent
     /** @var array<string, array{mtime:int, runner:string}> */
     private static array $compiledRunnerCache = [];
 
+    /** @var array<string, string> */
+    private static array $componentIdCache = [];
+
+    /** @var array<string, array{mtime:int, namespace:string}> */
+    private static array $compiledNamespaceCache = [];
+
     /**
      * Render a PHP component file by executing it in an isolated namespace,
      * then inject pp-component + props into the rendered root element.
@@ -42,19 +48,19 @@ final class ImportComponent
 
         $html = self::executePhpComponentIsolated($filePath, $props);
         $componentId = self::componentIdFromPath($filePath);
+        $serializedAttributes = ['pp-component' => $componentId] + self::buildSerializedAttributes($props);
 
         if (trim($html) === '') {
             throw new RuntimeException("Component rendered empty output: {$filePath}");
         }
 
-        $newHtml = self::tryApplyRootAttributesWithoutDom($html, $componentId, $props);
+        $newHtml = self::tryApplyRootAttributesWithoutDom($html, $serializedAttributes);
 
         if ($newHtml === null) {
             $dom = TemplateCompiler::convertToXml($html);
             $rootEl = self::getSingleRootElement($dom, $filePath);
-            $rootEl->setAttribute('pp-component', $componentId);
 
-            self::applyAttributes($rootEl, $props);
+            self::applyAttributes($rootEl, $serializedAttributes);
 
             $newHtml = TemplateCompiler::innerXml($dom);
         }
@@ -75,15 +81,38 @@ final class ImportComponent
 
     private static function componentIdFromPath(string $filePath): string
     {
-        return 's' . base_convert(sprintf('%u', crc32($filePath)), 10, 36);
+        return self::$componentIdCache[$filePath]
+            ??= 's' . base_convert(sprintf('%u', crc32($filePath)), 10, 36);
     }
 
     private static function executePhpComponentIsolated(string $filePath, array $props): string
     {
         $preparedSource = self::getPreparedSource($filePath);
         $compiledRunner = self::getCompiledRunner($filePath, $preparedSource);
-        $shouldRegisterResolvedExposedFunctions = $preparedSource['exposedFunctionNames'] !== []
-            && self::shouldRegisterExposedFunctions($filePath, $preparedSource['mtime']);
+        $compiledNamespace = null;
+        $shouldRegisterResolvedExposedFunctions = false;
+
+        if (
+            $preparedSource['exposedFunctionNames'] !== [] &&
+            self::shouldRegisterExposedFunctions($filePath, $preparedSource['mtime'])
+        ) {
+            if ($compiledRunner !== null) {
+                $compiledNamespace = self::getCompiledNamespace($filePath, $preparedSource['mtime']);
+
+                if (
+                    self::areResolvedExposedFunctionsRegistered(
+                        $preparedSource['exposedFunctionNames'],
+                        $compiledNamespace
+                    )
+                ) {
+                    self::$registeredExposedComponentMtims[$filePath] = $preparedSource['mtime'];
+                } else {
+                    $shouldRegisterResolvedExposedFunctions = true;
+                }
+            } else {
+                $shouldRegisterResolvedExposedFunctions = true;
+            }
+        }
 
         if ($compiledRunner !== null) {
             try {
@@ -92,7 +121,7 @@ final class ImportComponent
                 if ($shouldRegisterResolvedExposedFunctions) {
                     self::registerResolvedExposedFunctions(
                         $preparedSource['exposedFunctionNames'],
-                        self::getCompiledNamespace($filePath, $preparedSource['mtime'])
+                        $compiledNamespace ?? self::getCompiledNamespace($filePath, $preparedSource['mtime'])
                     );
                     self::$registeredExposedComponentMtims[$filePath] = $preparedSource['mtime'];
                 }
@@ -226,15 +255,10 @@ final class ImportComponent
         }
 
         $cached = self::$compiledRunnerCache[$filePath] ?? null;
-        if (
-            $cached !== null &&
-            $cached['mtime'] === $preparedSource['mtime'] &&
-            function_exists($cached['runner'])
-        ) {
+        if ($cached !== null && $cached['mtime'] === $preparedSource['mtime']) {
             return $cached['runner'];
         }
 
-        $hash = substr(hash('sha256', $filePath . '|' . $preparedSource['mtime']), 0, 24);
         $namespace = self::getCompiledNamespace($filePath, $preparedSource['mtime']);
         $functionName = '__pp_component_render';
         $runner = $namespace . '\\' . $functionName;
@@ -276,9 +300,21 @@ final class ImportComponent
 
     private static function getCompiledNamespace(string $filePath, int $mtime): string
     {
-        $hash = substr(hash('sha256', $filePath . '|' . $mtime), 0, 24);
+        $cached = self::$compiledNamespaceCache[$filePath] ?? null;
 
-        return 'PP\\ComponentSandbox\\Compiled\\C' . $hash;
+        if ($cached !== null && $cached['mtime'] === $mtime) {
+            return $cached['namespace'];
+        }
+
+        $namespace = 'PP\\ComponentSandbox\\Compiled\\C'
+            . substr(hash('sha256', $filePath . '|' . $mtime), 0, 24);
+
+        self::$compiledNamespaceCache[$filePath] = [
+            'mtime' => $mtime,
+            'namespace' => $namespace,
+        ];
+
+        return $namespace;
     }
 
     /**
@@ -524,6 +560,20 @@ final class ImportComponent
         foreach ($functionNames as $functionName) {
             ExposedRegistry::registerFunction($functionName, $namespace . '\\' . $functionName);
         }
+    }
+
+    /**
+     * @param list<string> $functionNames
+     */
+    private static function areResolvedExposedFunctionsRegistered(array $functionNames, string $namespace): bool
+    {
+        foreach ($functionNames as $functionName) {
+            if (ExposedRegistry::resolveFunction($functionName) !== $namespace . '\\' . $functionName) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static function normalizeImportAlias(string $name, ?string $alias): string
@@ -818,12 +868,11 @@ final class ImportComponent
     }
 
     /**
-     * @param array<string,mixed> $props
+     * @param array<string, string> $attributes
      */
     private static function tryApplyRootAttributesWithoutDom(
         string $html,
-        string $componentId,
-        array $props
+        array $attributes
     ): ?string {
         if (preg_match('/\A(\s*)(.*?)(\s*)\z/s', $html, $outerMatches) !== 1) {
             return null;
@@ -836,8 +885,6 @@ final class ImportComponent
         if ($trimmedHtml === '' || !str_starts_with($trimmedHtml, '<')) {
             return null;
         }
-
-        $attributes = ['pp-component' => $componentId] + self::buildSerializedAttributes($props);
 
         if (preg_match('/\A<([A-Za-z][\w:-]*)([^<>]*?)\s*\/>\z/s', $trimmedHtml, $matches) === 1) {
             $injectedHtml = self::injectAttributesIntoOpeningTag(
@@ -880,11 +927,13 @@ final class ImportComponent
         string $innerHtml,
         bool $selfClosing
     ): ?string {
-        $attributeNames = self::parseHtmlAttributeNames($existingAttributes);
+        if ($existingAttributes !== '') {
+            $attributeNames = self::parseHtmlAttributeNames($existingAttributes);
 
-        foreach (array_keys($attributes) as $attributeName) {
-            if (isset($attributeNames[$attributeName])) {
-                return null;
+            foreach (array_keys($attributes) as $attributeName) {
+                if (isset($attributeNames[$attributeName])) {
+                    return null;
+                }
             }
         }
 
@@ -1018,11 +1067,11 @@ final class ImportComponent
     }
 
     /**
-     * @param array<string,mixed> $props
+     * @param array<string, string> $attributes
      */
-    private static function applyAttributes(DOMElement $el, array $props): void
+    private static function applyAttributes(DOMElement $el, array $attributes): void
     {
-        foreach (self::buildSerializedAttributes($props) as $attrName => $attrValue) {
+        foreach ($attributes as $attrName => $attrValue) {
             $el->setAttribute($attrName, $attrValue);
         }
     }

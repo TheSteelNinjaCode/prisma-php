@@ -195,6 +195,16 @@ class Request
      */
     private static ?array $normalizedHeaders = null;
 
+    /** @var array{normalized:string,isJson:bool,isForm:bool,isMultipart:bool} */
+    private static array $contentTypeInfo = [
+        'normalized' => '',
+        'isJson' => false,
+        'isForm' => false,
+        'isMultipart' => false,
+    ];
+
+    private static ?string $contentTypeInfoSource = null;
+
     private static string $rawInput = '';
     private static bool $rawInputLoaded = false;
 
@@ -203,15 +213,22 @@ class Request
         self::$params = new ArrayObject([], ArrayObject::ARRAY_AS_PROPS);
         self::$dynamicParams = new ArrayObject([], ArrayObject::ARRAY_AS_PROPS);
         self::$normalizedHeaders = null;
+        self::$contentTypeInfoSource = null;
+        self::$contentTypeInfo = [
+            'normalized' => '',
+            'isJson' => false,
+            'isForm' => false,
+            'isMultipart' => false,
+        ];
         self::$rawInput = '';
         self::$rawInputLoaded = false;
 
         self::$referer = $_SERVER['HTTP_REFERER'] ?? 'Unknown';
-        self::$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-        self::$contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+        self::$method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+        self::$contentType = (string) ($_SERVER['CONTENT_TYPE'] ?? $_SERVER['HTTP_CONTENT_TYPE'] ?? '');
         self::$domainName = $_SERVER['HTTP_HOST'] ?? '';
         self::$scriptName = dirname($_SERVER['SCRIPT_NAME']);
-        self::$requestedWith = $_SERVER['HTTP_X_REQUESTED_WITH'] ?? '';
+        self::$requestedWith = (string) ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '');
 
         self::$isGet = self::$method === 'GET';
         self::$isPost = self::$method === 'POST';
@@ -238,39 +255,26 @@ class Request
      */
     private static function isAjaxRequest(): bool
     {
-        // Check for standard AJAX header
+        if (self::$requestedWith !== '' && strcasecmp(self::$requestedWith, 'xmlhttprequest') === 0) {
+            return true;
+        }
+
+        $contentTypeInfo = self::getContentTypeInfo();
         if (
-            !empty($_SERVER['HTTP_X_REQUESTED_WITH']) &&
-            strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest'
+            $contentTypeInfo['normalized'] !== '' &&
+            (
+                $contentTypeInfo['isJson']
+                || $contentTypeInfo['isForm']
+                || $contentTypeInfo['isMultipart']
+            )
         ) {
             return true;
         }
 
-        // Check for common AJAX content types
-        if (!empty($_SERVER['CONTENT_TYPE'])) {
-            $ajaxContentTypes = [
-                'application/json',
-                'application/x-www-form-urlencoded',
-                'multipart/form-data',
-            ];
-
-            foreach ($ajaxContentTypes as $contentType) {
-                if (stripos($_SERVER['CONTENT_TYPE'], $contentType) !== false) {
-                    return true;
-                }
-            }
-        }
-
-        // Check for common AJAX request methods
-        $ajaxMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
-        if (
-            !empty($_SERVER['REQUEST_METHOD']) &&
-            in_array(strtoupper($_SERVER['REQUEST_METHOD']), $ajaxMethods, true)
-        ) {
-            return true;
-        }
-
-        return false;
+        return self::$method === 'POST'
+            || self::$method === 'PUT'
+            || self::$method === 'PATCH'
+            || self::$method === 'DELETE';
     }
 
     /**
@@ -278,9 +282,9 @@ class Request
      */
     private static function isWireRequest(): bool
     {
-        $header = self::getHeaderValue('http_pp_wire_request');
+        $header = $_SERVER['HTTP_PP_WIRE_REQUEST'] ?? self::getHeaderValue('pp-wire-request');
 
-        return $header !== null && strtolower($header) === 'true';
+        return $header !== null && strcasecmp($header, 'true') === 0;
     }
 
     /**
@@ -290,11 +294,10 @@ class Request
      */
     private static function isXFileRequest(): bool
     {
-        $serverFetchSite = $_SERVER['HTTP_SEC_FETCH_SITE'] ?? '';
-        if (isset($serverFetchSite) && $serverFetchSite === 'same-origin') {
-            $header = self::getHeaderValue('http_pp_x_file_request');
+        if (($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '') === 'same-origin') {
+            $header = $_SERVER['HTTP_PP_X_FILE_REQUEST'] ?? self::getHeaderValue('pp-x-file-request');
 
-            return $header !== null && strtolower($header) === 'true';
+            return $header !== null && strcasecmp($header, 'true') === 0;
         }
 
         return false;
@@ -307,38 +310,34 @@ class Request
      */
     private static function getParams(): ArrayObject
     {
+        if (self::$method === 'GET') {
+            return new ArrayObject($_GET, ArrayObject::ARRAY_AS_PROPS);
+        }
+
         $params = new ArrayObject([], ArrayObject::ARRAY_AS_PROPS);
+        $rawInput = self::getRawInput();
+        $contentTypeInfo = self::getContentTypeInfo();
 
-        switch (self::$method) {
-            case 'GET':
-                $params = new ArrayObject($_GET, ArrayObject::ARRAY_AS_PROPS);
-                break;
-            default:
-                $rawInput = self::getRawInput();
-
-                // Handle JSON input with different variations (e.g., application/json, application/ld+json, etc.)
-                if (preg_match('#^application/(|\S+\+)json($|[ ;])#', self::$contentType)) {
-                    $jsonInput = $rawInput;
-                    if ($jsonInput !== false && !empty($jsonInput)) {
-                        self::$data = json_decode($jsonInput, true);
-                        if (json_last_error() === JSON_ERROR_NONE) {
-                            $params = new ArrayObject(self::$data, ArrayObject::ARRAY_AS_PROPS);
-                        } else {
-                            Boom::badRequest('Invalid JSON body')->toResponse();
-                        }
-                    }
+        if ($contentTypeInfo['isJson']) {
+            if ($rawInput !== '') {
+                self::$data = json_decode($rawInput, true);
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    return new ArrayObject(self::$data, ArrayObject::ARRAY_AS_PROPS);
                 }
 
-                // Handle URL-encoded input
-                if (stripos(self::$contentType, 'application/x-www-form-urlencoded') !== false) {
-                    if ($rawInput !== '') {
-                        parse_str($rawInput, $parsedParams);
-                        $params = new ArrayObject($parsedParams, ArrayObject::ARRAY_AS_PROPS);
-                    } else {
-                        $params = new ArrayObject($_POST, ArrayObject::ARRAY_AS_PROPS);
-                    }
-                }
-                break;
+                Boom::badRequest('Invalid JSON body')->toResponse();
+            }
+
+            return $params;
+        }
+
+        if ($contentTypeInfo['isForm']) {
+            if ($rawInput !== '') {
+                parse_str($rawInput, $parsedParams);
+                return new ArrayObject($parsedParams, ArrayObject::ARRAY_AS_PROPS);
+            }
+
+            return new ArrayObject($_POST, ArrayObject::ARRAY_AS_PROPS);
         }
 
         return $params;
@@ -418,6 +417,40 @@ class Request
             : null;
     }
 
+    private static function isJsonContentType(string $contentType): bool
+    {
+        if ($contentType === '' || !str_starts_with($contentType, 'application/')) {
+            return false;
+        }
+
+        return str_contains($contentType, '/json') || str_contains($contentType, '+json');
+    }
+
+    /**
+     * @return array{normalized:string,isJson:bool,isForm:bool,isMultipart:bool}
+     */
+    private static function getContentTypeInfo(): array
+    {
+        if (self::$contentTypeInfoSource === self::$contentType) {
+            return self::$contentTypeInfo;
+        }
+
+        $normalized = self::$contentType;
+        if ($normalized !== '' && strpbrk($normalized, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') !== false) {
+            $normalized = strtolower($normalized);
+        }
+
+        self::$contentTypeInfoSource = self::$contentType;
+        self::$contentTypeInfo = [
+            'normalized' => $normalized,
+            'isJson' => self::isJsonContentType($normalized),
+            'isForm' => str_contains($normalized, 'application/x-www-form-urlencoded'),
+            'isMultipart' => str_contains($normalized, 'multipart/form-data'),
+        ];
+
+        return self::$contentTypeInfo;
+    }
+
     /**
      * Get the protocol of the request.
      */
@@ -435,12 +468,13 @@ class Request
      */
     public static function getBearerToken(): ?string
     {
-        $authHeader = self::getHeaderValue('authorization')
-            ?? $_SERVER['HTTP_AUTHORIZATION']
+        $authHeader = $_SERVER['HTTP_AUTHORIZATION']
             ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
+            ?? $_SERVER['AUTHORIZATION']
+            ?? self::getHeaderValue('authorization')
             ?? null;
 
-        if ($authHeader && preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
+        if ($authHeader && preg_match('/Bearer\s+(\S+)/i', $authHeader, $matches)) {
             return $matches[1];
         }
 

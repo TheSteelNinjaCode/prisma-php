@@ -38,13 +38,20 @@ class PHPX implements IPHPX
     private static array $publicPropertyTypeCache = [];
 
     /**
+     * @var array<class-string, array<string, array<string, mixed>|null>>
+     */
+    private static array $publicPropertyTypeInfoCache = [];
+
+    /**
      * Constructor to initialize the component with the given properties.
      *
      * @param array<string, mixed> $props Optional properties to customize the component.
      */
     public function __construct(array $props = [])
     {
-        $propertyTypes = self::getPublicPropertyTypes(static::class);
+        $className = static::class;
+        $propertyTypes = self::getPublicPropertyTypes($className);
+        $propertyTypeInfos = self::getPublicPropertyTypeInfos($className, $propertyTypes);
 
         foreach ($props as $key => $value) {
             if (!array_key_exists($key, $propertyTypes)) {
@@ -52,14 +59,18 @@ class PHPX implements IPHPX
             }
 
             try {
-                $coercedValue = TypeCoercer::coerce($value, $propertyTypes[$key]);
+                $coercedValue = TypeCoercer::coerceWithCachedTypeInfo(
+                    $value,
+                    $propertyTypes[$key],
+                    $propertyTypeInfos[$key] ?? null
+                );
                 $this->$key = $coercedValue;
             } catch (InvalidArgumentException $e) {
                 throw new InvalidArgumentException(
                     sprintf(
                         "Invalid value for property '%s' in %s: %s",
                         $key,
-                        static::class,
+                        $className,
                         $e->getMessage()
                     )
                 );
@@ -91,6 +102,22 @@ class PHPX implements IPHPX
         }
 
         return self::$publicPropertyTypeCache[$className];
+    }
+
+    /**
+     * @param array<string, \ReflectionType|null> $propertyTypes
+     * @return array<string, array<string, mixed>|null>
+     */
+    private static function getPublicPropertyTypeInfos(string $className, array $propertyTypes): array
+    {
+        if (!isset(self::$publicPropertyTypeInfoCache[$className])) {
+            self::$publicPropertyTypeInfoCache[$className] = array_map(
+                static fn($type) => TypeCoercer::getCachedTypeInfo($type),
+                $propertyTypes
+            );
+        }
+
+        return self::$publicPropertyTypeInfoCache[$className];
     }
 
     /**

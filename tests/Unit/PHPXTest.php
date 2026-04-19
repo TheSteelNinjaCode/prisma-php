@@ -12,6 +12,7 @@ final class PHPXTest extends TestCase
     protected function tearDown(): void
     {
         $this->setStaticProperty(PHPX::class, 'publicPropertyTypeCache', []);
+        $this->setStaticProperty(PHPX::class, 'publicPropertyTypeInfoCache', []);
     }
 
     public function testConstructorCoercesPublicPropsAndReusesCachedMetadata(): void

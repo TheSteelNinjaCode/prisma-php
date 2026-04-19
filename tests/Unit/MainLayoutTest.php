@@ -16,6 +16,9 @@ final class MainLayoutTest extends TestCase
         $this->setStaticProperty(MainLayout::class, 'footerScripts', []);
         $this->setStaticProperty(MainLayout::class, 'processedScripts', []);
         $this->setStaticProperty(MainLayout::class, 'footerComponentCounter', 0);
+        $this->setStaticProperty(MainLayout::class, 'footerScriptHashCache', []);
+        $this->setStaticProperty(MainLayout::class, 'footerScriptAttributesCache', []);
+        $this->setStaticProperty(MainLayout::class, 'preparedHeadScriptCache', []);
     }
 
     protected function tearDown(): void
@@ -24,6 +27,9 @@ final class MainLayoutTest extends TestCase
         $this->setStaticProperty(MainLayout::class, 'footerScripts', []);
         $this->setStaticProperty(MainLayout::class, 'processedScripts', []);
         $this->setStaticProperty(MainLayout::class, 'footerComponentCounter', 0);
+        $this->setStaticProperty(MainLayout::class, 'footerScriptHashCache', []);
+        $this->setStaticProperty(MainLayout::class, 'footerScriptAttributesCache', []);
+        $this->setStaticProperty(MainLayout::class, 'preparedHeadScriptCache', []);
     }
 
     public function testAddFooterScriptDeduplicatesAndPreparesAttributes(): void
@@ -73,6 +79,20 @@ final class MainLayoutTest extends TestCase
 
         self::assertSame('', MainLayout::outputHeadScripts());
         self::assertSame([], $this->getStaticProperty(MainLayout::class, 'headScripts')->values());
+    }
+
+    public function testAddFooterScriptPreservesExistingComponentAndTypeAttributes(): void
+    {
+        $script = '<script pp-component="existing" type="module" data-keep="true">console.log(1)</script>';
+
+        $this->registerFooterScript($script);
+
+        $output = MainLayout::outputFooterScripts();
+
+        self::assertStringContainsString('pp-component="existing"', $output);
+        self::assertStringContainsString('type="module"', $output);
+        self::assertStringNotContainsString('type="text/pp"', $output);
+        self::assertSame(1, substr_count($output, 'pp-component='));
     }
 
     private function registerFooterScript(string ...$scripts): void

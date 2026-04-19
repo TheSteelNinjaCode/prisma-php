@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace PP\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use PP\MainLayout;
 use PP\PHPX\TemplateCompiler;
 use PP\PrismaPHPSettings;
+use PP\Set;
 
 final class TemplateCompilerTest extends TestCase
 {
@@ -18,6 +20,7 @@ final class TemplateCompilerTest extends TestCase
         $this->setStaticProperty(TemplateCompiler::class, 'cacheStats', []);
         $this->setStaticProperty(TemplateCompiler::class, 'cacheEnabled', true);
         $this->setStaticProperty(TemplateCompiler::class, 'maxCacheSize', 2);
+        $this->setStaticProperty(TemplateCompiler::class, 'componentPropMetadataCache', []);
     }
 
     protected function tearDown(): void
@@ -25,6 +28,7 @@ final class TemplateCompilerTest extends TestCase
         $this->setStaticProperty(TemplateCompiler::class, 'compiledCache', []);
         $this->setStaticProperty(TemplateCompiler::class, 'cacheStats', []);
         $this->setStaticProperty(TemplateCompiler::class, 'maxCacheSize', 100);
+        $this->setStaticProperty(TemplateCompiler::class, 'componentPropMetadataCache', []);
     }
 
     public function testCompileCacheEvictsLeastUsedEntryAndStaysBounded(): void
@@ -76,6 +80,20 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringContainsString('title="Save"', $output);
     }
 
+    public function testCompileComponentHtmlInjectsRootEventListenersOnSimpleMarkup(): void
+    {
+        $method = new \ReflectionMethod(TemplateCompiler::class, 'compileComponentHtml');
+        $method->setAccessible(true);
+
+        $html = '<button>Save</button>';
+        $output = $method->invoke(null, $html, 's1', ['onClick' => '{save}', 'title' => 'Save']);
+
+        self::assertStringContainsString('pp-component="s1"', $output);
+        self::assertStringContainsString('on-click="{save}"', $output);
+        self::assertStringContainsString('title="Save"', $output);
+        self::assertStringContainsString('>Save</button>', $output);
+    }
+
     public function testCompileComponentHtmlDoesNotDuplicateDescendantAttributesOnRoot(): void
     {
         $method = new \ReflectionMethod(TemplateCompiler::class, 'compileComponentHtml');
@@ -114,6 +132,31 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringNotContainsString('<div pp-component="s1" title="Root">', $output);
         self::assertStringContainsString('<span title="child"></span>', $output);
         self::assertStringContainsString('<template pp-owner="parent"><button on-click="{save}">', $output);
+    }
+
+    public function testInjectDynamicContentPlacesMetadataHeadScriptsAndFooterScripts(): void
+    {
+        $this->setStaticProperty(MainLayout::class, 'headScripts', new Set());
+        $this->setStaticProperty(MainLayout::class, 'footerScripts', []);
+        $this->setStaticProperty(MainLayout::class, 'processedScripts', []);
+        $this->setStaticProperty(MainLayout::class, 'customMetadata', []);
+        $this->setStaticProperty(MainLayout::class, 'headScriptsOutputCache', null);
+        $this->setStaticProperty(MainLayout::class, 'footerScriptsOutputCache', null);
+
+        MainLayout::$title = 'Dashboard';
+        MainLayout::$description = 'Overview';
+        MainLayout::addHeadScript('<script src="/app.js"></script>');
+        MainLayout::addFooterScript('<script>console.log(1)</script>');
+
+        $html = '<html><head data-test="1"></head><body><main>Hello</main></body></html>';
+        $output = TemplateCompiler::injectDynamicContent($html);
+
+        self::assertStringContainsString('<head data-test="1"><meta charset="UTF-8">', $output);
+        self::assertStringContainsString('pp-dynamic-script="81D7D"', $output);
+        self::assertStringContainsString('pp-component="', $output);
+        self::assertStringContainsString('type="text/pp"', $output);
+        self::assertMatchesRegularExpression('/pp-dynamic-script="81D7D"<\/script><\/head>/i', $output);
+        self::assertMatchesRegularExpression('/type="text\/pp">console\.log\(1\)<\/script><\/body>/i', $output);
     }
 
     private function getStaticProperty(string $className, string $propertyName): mixed

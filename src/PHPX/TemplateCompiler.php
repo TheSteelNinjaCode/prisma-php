@@ -87,6 +87,8 @@ class TemplateCompiler
     private static int $maxCacheSize = 100;
     private static array $cacheStats = [];
     private static array $componentFileStack = [];
+    private static array $camelToKebabCache = [];
+    private static array $componentPropMetadataCache = [];
 
     public static function compile(string $templateContent): string
     {
@@ -105,8 +107,8 @@ class TemplateCompiler
             $leastUsed = self::findLeastUsedCacheKey();
 
             if ($leastUsed !== null) {
-                unset(self::$compiledCache[$leastUsed]);
-                unset(self::$cacheStats[$leastUsed]);
+            unset(self::$compiledCache[$leastUsed]);
+            unset(self::$cacheStats[$leastUsed]);
             }
         }
 
@@ -164,6 +166,13 @@ class TemplateCompiler
 
     public static function scopeRouteRoot(string $htmlContent, string $filePath): string
     {
+        $componentId = self::routeComponentIdFromPath($filePath);
+        $fastScopedHtml = self::tryScopeRouteRootWithoutDom($htmlContent, $componentId);
+
+        if ($fastScopedHtml !== null) {
+            return $fastScopedHtml;
+        }
+
         $dom = self::createDomForSingleRootValidation($htmlContent, $filePath, 'Route file');
         $rootElement = self::getSingleRootElementForValidation($dom, $filePath, 'Route file');
 
@@ -171,7 +180,7 @@ class TemplateCompiler
             return $htmlContent;
         }
 
-        $rootElement->setAttribute(self::COMPONENT_ATTRIBUTE, self::routeComponentIdFromPath($filePath));
+        $rootElement->setAttribute(self::COMPONENT_ATTRIBUTE, $componentId);
 
         return self::innerXml($dom);
     }
@@ -181,20 +190,51 @@ class TemplateCompiler
         string $filePath,
         string $contextLabel = 'Template'
     ): void {
+        if (self::analyzeSingleRootHtml($htmlContent) !== null) {
+            return;
+        }
+
         $dom = self::createDomForSingleRootValidation($htmlContent, $filePath, $contextLabel);
         self::getSingleRootElementForValidation($dom, $filePath, $contextLabel);
     }
 
     public static function injectDynamicContent(string $htmlContent): string
     {
-        $replacements = [
-            self::HEAD_PATTERNS['open'] => '$1' . MainLayout::outputMetadata(),
-            self::HEAD_PATTERNS['close'] => MainLayout::outputHeadScripts() . '$1',
-            self::BODY_PATTERNS['close'] => MainLayout::outputFooterScripts() . '$1',
-        ];
+        $headOpenPos = stripos($htmlContent, '<head');
+        if ($headOpenPos !== false) {
+            $headOpenEnd = self::findHtmlTagEnd($htmlContent, $headOpenPos);
 
-        foreach ($replacements as $pattern => $replacement) {
-            $htmlContent = preg_replace($pattern, $replacement, $htmlContent, 1);
+            if ($headOpenEnd !== null) {
+                $metadata = MainLayout::outputMetadata();
+
+                if ($metadata !== '') {
+                    $htmlContent = substr($htmlContent, 0, $headOpenEnd + 1)
+                        . $metadata
+                        . substr($htmlContent, $headOpenEnd + 1);
+                }
+            }
+        }
+
+        $headClosePos = stripos($htmlContent, '</head');
+        if ($headClosePos !== false) {
+            $headScripts = MainLayout::outputHeadScripts();
+
+            if ($headScripts !== '') {
+                $htmlContent = substr($htmlContent, 0, $headClosePos)
+                    . $headScripts
+                    . substr($htmlContent, $headClosePos);
+            }
+        }
+
+        $bodyClosePos = stripos($htmlContent, '</body');
+        if ($bodyClosePos !== false) {
+            $footerScripts = MainLayout::outputFooterScripts();
+
+            if ($footerScripts !== '') {
+                $htmlContent = substr($htmlContent, 0, $bodyClosePos)
+                    . $footerScripts
+                    . substr($htmlContent, $bodyClosePos);
+            }
         }
 
         return $htmlContent;
@@ -357,7 +397,7 @@ class TemplateCompiler
 
     private static function escapeAttributeAngles(string $html): string
     {
-        if (!preg_match('/\s\w+=["\']/', $html)) {
+        if (!preg_match('/\s[\w:-]+\s*=\s*(["\'])[^"\']*[<>][^"\']*\1/s', $html)) {
             return $html;
         }
 
@@ -599,8 +639,16 @@ class TemplateCompiler
             return $trimmed;
         }
 
-        if (preg_match("/^<template\\b[^>]*\\bpp-owner\\s*=\\s*['\"][^'\"]+['\"][^>]*>/i", $trimmed) === 1) {
-            return $trimmed;
+        if (str_starts_with($trimmed, '<template')) {
+            $openingTagEnd = self::findHtmlTagEnd($trimmed, 0);
+
+            if ($openingTagEnd !== null) {
+                $openingTag = substr($trimmed, 0, $openingTagEnd + 1);
+
+                if (self::openingTagHasAttribute($openingTag, 'pp-owner')) {
+                    return $trimmed;
+                }
+            }
         }
 
         $owner = htmlspecialchars($owner !== '' ? $owner : 'app', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -788,83 +836,116 @@ class TemplateCompiler
         string $parentContext = ''
     ): string {
         $html = self::preprocessFragmentSyntax($html);
-        $fragDom = self::convertToXml($html);
         $normalizeDynamicAttributes = self::mightHaveDynamicCamelAttributes($html);
 
-        ['regularProps' => $regularProps, 'eventListeners' => $eventListeners] = self::partitionComponentProps($incomingProps);
+        $normalizedProps = self::normalizeComponentProps($incomingProps, !empty($parentContext));
+        $regularProps = $normalizedProps['regularProps'];
+        $eventListeners = $normalizedProps['eventListeners'];
+
+        if ($parentContext === '') {
+            $stringFastPathHtml = self::tryCompileSimpleRootComponentHtmlWithoutDom(
+                $html,
+                $sectionId,
+                $regularProps,
+                $eventListeners,
+                $normalizeDynamicAttributes
+            );
+
+            if ($stringFastPathHtml !== null) {
+                return $stringFastPathHtml;
+            }
+        }
+
+        $fragDom = self::convertToXml($html);
+        $rootElement = self::getSingleFragmentRootElement($fragDom);
+
+        if ($rootElement !== null && $parentContext === '') {
+            $fastPathHtml = self::tryCompileSimpleRootComponentHtml(
+                $fragDom,
+                $rootElement,
+                $sectionId,
+                $regularProps,
+                $eventListeners,
+                $normalizeDynamicAttributes
+            );
+
+            if ($fastPathHtml !== null) {
+                return $fastPathHtml;
+            }
+        }
+
         $hasRegularProps = $regularProps !== [];
         $hasEventListeners = $eventListeners !== [];
         $relevantAttributes = ($hasRegularProps || $hasEventListeners)
-            ? self::collectRelevantAttributeNames($regularProps, $eventListeners)
+            ? $normalizedProps['relevantAttributes']
             : [];
         $scopedEventAttributes = ($hasEventListeners && !empty($parentContext))
-            ? self::buildScopedEventAttributeMap($eventListeners)
+            ? $normalizedProps['scopedEventAttributes']
             : [];
+        $analysisNode = $rootElement ?? $fragDom->documentElement;
         [
             'existingAttributes' => $existingAttributes,
             'eventElementsToWrap' => $eventElementsToWrap,
         ] = ($relevantAttributes !== [] || $scopedEventAttributes !== [])
             ? self::analyzeComponentTree(
-                $fragDom->documentElement,
+                $analysisNode,
                 $relevantAttributes,
                 $scopedEventAttributes,
                 $normalizeDynamicAttributes
             )
             : ['existingAttributes' => [], 'eventElementsToWrap' => []];
 
+        $componentRoot = $rootElement;
+        if ($componentRoot === null) {
+            foreach ($fragDom->documentElement->childNodes as $child) {
+                if ($child instanceof DOMElement) {
+                    $componentRoot = $child;
+                    break;
+                }
+            }
+        }
+
         $needsScope = false;
-        $rootElement = null;
+        if ($componentRoot instanceof DOMElement) {
+            $rootElement = $componentRoot;
+            $componentRoot->setAttribute(self::COMPONENT_ATTRIBUTE, $sectionId);
 
-        foreach ($fragDom->documentElement->childNodes as $child) {
-            if ($child instanceof DOMElement) {
-                $rootElement = $child;
-                $child->setAttribute(self::COMPONENT_ATTRIBUTE, $sectionId);
+            foreach ($regularProps as $propInfo) {
+                $propName = $propInfo['rawName'];
+                $kebabName = $propInfo['kebabName'];
 
-                foreach ($regularProps as $propName => $propValue) {
-                    $attrName = self::containsMustacheSyntax($propValue)
-                        ? self::camelToKebab($propName)
-                        : $propName;
+                if (
+                    isset($existingAttributes[$propName]) ||
+                    isset($existingAttributes[$kebabName])
+                ) {
+                    continue;
+                }
+
+                $componentRoot->setAttribute($propInfo['htmlName'], (string) $propInfo['value']);
+            }
+
+            if (!empty($parentContext) && ($hasRegularProps || $hasEventListeners)) {
+                $needsScope = true;
+            }
+
+            if ($hasEventListeners) {
+                foreach ($eventListeners as $eventInfo) {
+                    $eventName = $eventInfo['rawName'];
+                    $kebabEventName = $eventInfo['kebabName'];
 
                     if (
-                        $child->hasAttribute($propName) ||
-                        $child->hasAttribute(self::camelToKebab($propName)) ||
-                        isset($existingAttributes[$propName]) ||
-                        isset($existingAttributes[self::camelToKebab($propName)])
+                        isset($existingAttributes[$eventName]) ||
+                        isset($existingAttributes[$kebabEventName])
                     ) {
                         continue;
                     }
 
-                    $child->setAttribute($attrName, $propValue);
-                }
-
-                if (!empty($parentContext) && ($hasRegularProps || $hasEventListeners)) {
-                    $needsScope = true;
-                }
-
-                if ($hasEventListeners) {
-                    foreach ($eventListeners as $eventName => $eventHandler) {
-                        $kebabEventName = self::camelToKebab($eventName);
-
-                        if (
-                            isset($existingAttributes[$eventName]) ||
-                            isset($existingAttributes[$kebabEventName])
-                        ) {
-                            continue;
-                        }
-
-                        if (self::containsMustacheSyntax($eventHandler)) {
-                            if ($child->hasAttribute($eventName)) {
-                                $child->removeAttribute($eventName);
-                            }
-
-                            $child->setAttribute($kebabEventName, $eventHandler);
-                        } else {
-                            $child->setAttribute($eventName, $eventHandler);
-                        }
+                    if ($eventInfo['containsMustache']) {
+                        $componentRoot->setAttribute($kebabEventName, (string) $eventInfo['value']);
+                    } else {
+                        $componentRoot->setAttribute($eventName, (string) $eventInfo['value']);
                     }
                 }
-
-                break;
             }
         }
 
@@ -890,22 +971,355 @@ class TemplateCompiler
     }
 
     /**
-     * @param array<string, mixed> $eventListeners
-     * @return array<string, array<string, true>>
+     * @param array<string, array{rawName:string, kebabName:string, htmlName:string, value:mixed, containsMustache:bool}> $regularProps
+     * @param array<string, array{rawName:string, kebabName:string, htmlName:string, value:mixed, containsMustache:bool}> $eventListeners
      */
-    private static function buildScopedEventAttributeMap(array $eventListeners): array
-    {
-        $scopedEventAttributes = [];
+    private static function tryCompileSimpleRootComponentHtmlWithoutDom(
+        string $html,
+        string $sectionId,
+        array $regularProps,
+        array $eventListeners,
+        bool $normalizeDynamicAttributes
+    ): ?string {
+        $analysis = self::analyzeSingleRootHtml($html);
+        if ($analysis === null) {
+            return null;
+        }
 
-        foreach ($eventListeners as $eventName => $eventHandler) {
-            $handlerValue = (string) $eventHandler;
+        if (!$analysis['selfClosing']) {
+            $closingTagStart = strripos(
+                substr($analysis['trimmedHtml'], 0, $analysis['rootEnd'] + 1),
+                '</' . $analysis['tagName']
+            );
 
-            foreach ([$eventName, self::camelToKebab($eventName)] as $attributeName) {
-                $scopedEventAttributes[$attributeName][$handlerValue] = true;
+            if ($closingTagStart === false) {
+                return null;
+            }
+
+            $innerHtml = substr(
+                $analysis['trimmedHtml'],
+                strlen($analysis['openingTag']),
+                $closingTagStart - strlen($analysis['openingTag'])
+            );
+
+            if (str_contains($innerHtml, '<')) {
+                return null;
             }
         }
 
-        return $scopedEventAttributes;
+        $normalizedOpeningTag = self::normalizeOpeningTagForStringFastPath(
+            $analysis['openingTag'],
+            $normalizeDynamicAttributes,
+            $analysis['selfClosing']
+        );
+
+        if ($normalizedOpeningTag === null) {
+            return null;
+        }
+
+        $openingTag = $normalizedOpeningTag['openingTag'];
+        $existingAttributes = $normalizedOpeningTag['existingAttributes'];
+        $attributesToAppend = [];
+
+        if (!isset($existingAttributes[self::COMPONENT_ATTRIBUTE])) {
+            $attributesToAppend[self::COMPONENT_ATTRIBUTE] = $sectionId;
+            $existingAttributes[self::COMPONENT_ATTRIBUTE] = true;
+        }
+
+        foreach ($regularProps as $propInfo) {
+            $propName = $propInfo['rawName'];
+            $kebabName = $propInfo['kebabName'];
+
+            if (isset($existingAttributes[$propName]) || isset($existingAttributes[$kebabName])) {
+                continue;
+            }
+
+            $attributesToAppend[$propInfo['htmlName']] = (string) $propInfo['value'];
+            $existingAttributes[$propName] = true;
+            $existingAttributes[$kebabName] = true;
+        }
+
+        foreach ($eventListeners as $eventInfo) {
+            $eventName = $eventInfo['rawName'];
+            $kebabEventName = $eventInfo['kebabName'];
+
+            if (isset($existingAttributes[$eventName]) || isset($existingAttributes[$kebabEventName])) {
+                continue;
+            }
+
+            $attributesToAppend[$eventInfo['containsMustache'] ? $kebabEventName : $eventName]
+                = (string) $eventInfo['value'];
+            $existingAttributes[$eventName] = true;
+            $existingAttributes[$kebabEventName] = true;
+        }
+
+        if ($attributesToAppend !== []) {
+            $insertPosition = self::getOpeningTagAttributeInsertPosition($openingTag, strlen($openingTag) - 1);
+            $openingTag = substr($openingTag, 0, $insertPosition)
+                . self::buildStringFastPathAttributeMarkup($attributesToAppend)
+                . substr($openingTag, $insertPosition);
+        }
+
+        $htmlOut = $analysis['leadingWhitespace']
+            . $openingTag
+            . substr($analysis['trimmedHtml'], strlen($analysis['openingTag']))
+            . $analysis['trailingWhitespace'];
+
+        $htmlOut = self::normalizeSelfClosingTags($htmlOut);
+
+        if (self::needsRecompilation($htmlOut)) {
+            $htmlOut = self::compile($htmlOut);
+        }
+
+        return $htmlOut;
+    }
+
+    /**
+     * @param array<string, array{rawName:string, kebabName:string, htmlName:string, value:mixed, containsMustache:bool}> $regularProps
+     * @param array<string, array{rawName:string, kebabName:string, htmlName:string, value:mixed, containsMustache:bool}> $eventListeners
+     */
+    private static function tryCompileSimpleRootComponentHtml(
+        DOMDocument $fragDom,
+        DOMElement $rootElement,
+        string $sectionId,
+        array $regularProps,
+        array $eventListeners,
+        bool $normalizeDynamicAttributes
+    ): ?string {
+        if (self::rootElementHasChildElements($rootElement)) {
+            return null;
+        }
+
+        $existingAttributes = self::normalizeElementAttributesForFastPath($rootElement, $normalizeDynamicAttributes);
+        $rootElement->setAttribute(self::COMPONENT_ATTRIBUTE, $sectionId);
+
+        foreach ($regularProps as $propInfo) {
+            $propName = $propInfo['rawName'];
+            $kebabName = $propInfo['kebabName'];
+
+            if (
+                isset($existingAttributes[$propName]) ||
+                isset($existingAttributes[$kebabName])
+            ) {
+                continue;
+            }
+
+            $rootElement->setAttribute($propInfo['htmlName'], (string) $propInfo['value']);
+        }
+
+        foreach ($eventListeners as $eventInfo) {
+            $eventName = $eventInfo['rawName'];
+            $kebabEventName = $eventInfo['kebabName'];
+
+            if (
+                isset($existingAttributes[$eventName]) ||
+                isset($existingAttributes[$kebabEventName])
+            ) {
+                continue;
+            }
+
+            $rootElement->setAttribute(
+                $eventInfo['containsMustache'] ? $kebabEventName : $eventName,
+                (string) $eventInfo['value']
+            );
+        }
+
+        $htmlOut = self::innerXml($fragDom);
+        $htmlOut = self::normalizeSelfClosingTags($htmlOut);
+
+        if (self::needsRecompilation($htmlOut)) {
+            $htmlOut = self::compile($htmlOut);
+        }
+
+        return $htmlOut;
+    }
+
+    private static function getSingleFragmentRootElement(DOMDocument $fragDom): ?DOMElement
+    {
+        $rootElement = null;
+
+        foreach ($fragDom->documentElement->childNodes as $child) {
+            if ($child instanceof DOMComment) {
+                continue;
+            }
+
+            if ($child instanceof DOMText) {
+                if (trim($child->textContent) === '') {
+                    continue;
+                }
+
+                return null;
+            }
+
+            if (!$child instanceof DOMElement) {
+                return null;
+            }
+
+            if ($rootElement !== null) {
+                return null;
+            }
+
+            $rootElement = $child;
+        }
+
+        return $rootElement;
+    }
+
+    /**
+     * @return array{openingTag:string, existingAttributes: array<string, true>}|null
+     */
+    private static function normalizeOpeningTagForStringFastPath(
+        string $openingTag,
+        bool $normalizeDynamicAttributes,
+        bool $selfClosing
+    ): ?array {
+        if (preg_match('/\A<([A-Za-z][\w:-]*)\b([\s\S]*?)>\z/s', $openingTag, $matches) !== 1) {
+            return null;
+        }
+
+        $tagName = $matches[1];
+        $attributeMarkup = $matches[2];
+
+        if ($selfClosing) {
+            $attributeMarkup = preg_replace('/\/\s*\z/', '', $attributeMarkup) ?? $attributeMarkup;
+        }
+
+        $attributeMarkup = trim($attributeMarkup);
+        $existingAttributes = [];
+
+        if ($attributeMarkup === '') {
+            return [
+                'openingTag' => $selfClosing ? '<' . $tagName . ' />' : '<' . $tagName . '>',
+                'existingAttributes' => $existingAttributes,
+            ];
+        }
+
+        preg_match_all(
+            "/([\w:-]+)\s*(?:=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+)))?/i",
+            $attributeMarkup,
+            $matches,
+            PREG_SET_ORDER
+        );
+
+        if ($matches === []) {
+            return null;
+        }
+
+        $normalizedAttributes = [];
+
+        foreach ($matches as $match) {
+            $originalName = $match[1];
+            $hasExplicitValue = str_contains($match[0], '=');
+
+            if (isset($match[2]) && $match[2] !== '') {
+                $value = $match[2];
+            } elseif (isset($match[3]) && $match[3] !== '') {
+                $value = $match[3];
+            } elseif (isset($match[4]) && $match[4] !== '') {
+                $value = $match[4];
+            } else {
+                $value = '';
+            }
+
+            $normalizedName = $originalName;
+            if ($normalizeDynamicAttributes && self::containsMustacheSyntax($value)) {
+                $normalizedName = self::camelToKebab($originalName);
+            }
+
+            $existingAttributes[$originalName] = true;
+            $existingAttributes[$normalizedName] = true;
+            $normalizedAttributes[] = [
+                'name' => $normalizedName,
+                'value' => $value,
+                'hasExplicitValue' => $hasExplicitValue,
+            ];
+        }
+
+        $rebuiltOpeningTag = '<' . $tagName;
+
+        foreach ($normalizedAttributes as $attribute) {
+            $rebuiltOpeningTag .= ' ' . $attribute['name'];
+
+            if ($attribute['hasExplicitValue']) {
+                $rebuiltOpeningTag .= '="'
+                    . htmlspecialchars($attribute['value'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                    . '"';
+            }
+        }
+
+        $rebuiltOpeningTag .= $selfClosing ? ' />' : '>';
+
+        return [
+            'openingTag' => $rebuiltOpeningTag,
+            'existingAttributes' => $existingAttributes,
+        ];
+    }
+
+    /**
+     * @param array<string, string> $attributes
+     */
+    private static function buildStringFastPathAttributeMarkup(array $attributes): string
+    {
+        $markup = '';
+
+        foreach ($attributes as $name => $value) {
+            $markup .= ' ' . $name . '="'
+                . htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . '"';
+        }
+
+        return $markup;
+    }
+
+    private static function rootElementHasChildElements(DOMElement $rootElement): bool
+    {
+        foreach ($rootElement->childNodes as $child) {
+            if ($child instanceof DOMElement) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return array<string, true>
+     */
+    private static function normalizeElementAttributesForFastPath(
+        DOMElement $element,
+        bool $normalizeDynamicAttributes
+    ): array {
+        $existingAttributes = [];
+        $attributesToRename = [];
+
+        foreach ($element->attributes as $attribute) {
+            $attributeName = $attribute->name;
+            $attributeValue = $attribute->value;
+
+            if (
+                $normalizeDynamicAttributes &&
+                self::attributeNeedsDynamicNormalization($attributeName, $attributeValue)
+            ) {
+                $kebabName = self::camelToKebab($attributeName);
+
+                if ($kebabName !== $attributeName) {
+                    $attributesToRename[$attributeName] = [
+                        'kebabName' => $kebabName,
+                        'value' => $attributeValue,
+                    ];
+                    $attributeName = $kebabName;
+                }
+            }
+
+            $existingAttributes[$attributeName] = true;
+        }
+
+        foreach ($attributesToRename as $oldName => $renameInfo) {
+            $element->removeAttribute($oldName);
+            $element->setAttribute($renameInfo['kebabName'], $renameInfo['value']);
+        }
+
+        return $existingAttributes;
     }
 
     /**
@@ -917,76 +1331,19 @@ class TemplateCompiler
         ?DOMNode $node,
         array $targetAttributes,
         array $scopedEventAttributes,
-        bool $normalizeDynamicAttributes,
-        array &$foundAttributes = [],
-        array &$eventElementsToWrap = [],
-        bool $insideOwnerTemplate = false
+        bool $normalizeDynamicAttributes
     ): array {
-        if (!$node) {
-            return [
-                'existingAttributes' => $foundAttributes,
-                'eventElementsToWrap' => $eventElementsToWrap,
-            ];
-        }
-
-        $allowEventWrapping = !$insideOwnerTemplate;
+        $foundAttributes = [];
+        $eventElementsToWrap = [];
 
         if ($node instanceof DOMElement) {
-            $matchesScopedEventListener = false;
-            $attributesToRename = [];
-
-            foreach ($node->attributes as $attribute) {
-                $attributeName = $attribute->name;
-                $attributeValue = $attribute->value;
-
-                if ($normalizeDynamicAttributes && self::containsMustacheSyntax($attributeValue)) {
-                    $kebabName = self::camelToKebab($attributeName);
-
-                    if ($kebabName !== $attributeName) {
-                        $attributesToRename[$attributeName] = [
-                            'kebabName' => $kebabName,
-                            'value' => $attributeValue,
-                        ];
-                        $attributeName = $kebabName;
-                    }
-                }
-
-                if (isset($targetAttributes[$attributeName])) {
-                    $foundAttributes[$attributeName] = true;
-                }
-
-                if (
-                    $allowEventWrapping &&
-                    !$matchesScopedEventListener &&
-                    isset($scopedEventAttributes[$attributeName][$attributeValue])
-                ) {
-                    $matchesScopedEventListener = true;
-                }
-            }
-
-            foreach ($attributesToRename as $oldName => $renameInfo) {
-                $node->removeAttribute($oldName);
-                $node->setAttribute($renameInfo['kebabName'], $renameInfo['value']);
-            }
-
-            if ($matchesScopedEventListener) {
-                $eventElementsToWrap[] = $node;
-                $allowEventWrapping = false;
-            }
-        }
-
-        $insideOwnerTemplate = $insideOwnerTemplate || self::isOwnerTemplateElement($node);
-
-        for ($child = $node->firstChild; $child !== null; $child = $nextSibling) {
-            $nextSibling = $child->nextSibling;
-            self::analyzeComponentTree(
-                $child,
+            self::collectComponentTreeState(
+                $node,
                 $targetAttributes,
                 $scopedEventAttributes,
                 $normalizeDynamicAttributes,
                 $foundAttributes,
-                $eventElementsToWrap,
-                $insideOwnerTemplate
+                $eventElementsToWrap
             );
         }
 
@@ -996,39 +1353,111 @@ class TemplateCompiler
         ];
     }
 
+    /**
+     * @param array<string, true> $targetAttributes
+     * @param array<string, array<string, true>> $scopedEventAttributes
+     * @param array<string, true> $foundAttributes
+     * @param list<DOMElement> $eventElementsToWrap
+     */
+    private static function collectComponentTreeState(
+        DOMElement $node,
+        array $targetAttributes,
+        array $scopedEventAttributes,
+        bool $normalizeDynamicAttributes,
+        array &$foundAttributes,
+        array &$eventElementsToWrap,
+        bool $insideOwnerTemplate = false
+    ): void {
+        $allowEventWrapping = !$insideOwnerTemplate;
+
+        $matchesScopedEventListener = false;
+        $attributesToRename = [];
+
+        foreach ($node->attributes as $attribute) {
+            $attributeName = $attribute->name;
+            $attributeValue = $attribute->value;
+
+            if (
+                $normalizeDynamicAttributes &&
+                self::attributeNeedsDynamicNormalization($attributeName, $attributeValue)
+            ) {
+                $kebabName = self::camelToKebab($attributeName);
+
+                if ($kebabName !== $attributeName) {
+                    $attributesToRename[$attributeName] = [
+                        'kebabName' => $kebabName,
+                        'value' => $attributeValue,
+                    ];
+                    $attributeName = $kebabName;
+                }
+            }
+
+            if (isset($targetAttributes[$attributeName])) {
+                $foundAttributes[$attributeName] = true;
+            }
+
+            if (
+                $allowEventWrapping &&
+                !$matchesScopedEventListener &&
+                isset($scopedEventAttributes[$attributeName][$attributeValue])
+            ) {
+                $matchesScopedEventListener = true;
+            }
+        }
+
+        foreach ($attributesToRename as $oldName => $renameInfo) {
+            $node->removeAttribute($oldName);
+            $node->setAttribute($renameInfo['kebabName'], $renameInfo['value']);
+        }
+
+        if ($matchesScopedEventListener) {
+            $eventElementsToWrap[] = $node;
+            $allowEventWrapping = false;
+        }
+
+        $childInsideOwnerTemplate = $insideOwnerTemplate || self::isOwnerTemplateElement($node);
+
+        for ($child = $node->firstChild; $child !== null; $child = $nextSibling) {
+            $nextSibling = $child->nextSibling;
+
+            if (!$child instanceof DOMElement) {
+                continue;
+            }
+
+            self::collectComponentTreeState(
+                $child,
+                $targetAttributes,
+                $scopedEventAttributes,
+                $normalizeDynamicAttributes,
+                $foundAttributes,
+                $eventElementsToWrap,
+                $childInsideOwnerTemplate
+            );
+        }
+    }
+
     private static function isOwnerTemplateElement(DOMNode $node): bool
     {
-        return $node instanceof DOMElement
-            && strtolower($node->tagName) === 'template'
-            && $node->hasAttribute('pp-owner');
+        if (!$node instanceof DOMElement || !$node->hasAttribute('pp-owner')) {
+            return false;
+        }
+
+        return $node->tagName === 'template' || strcasecmp($node->tagName, 'template') === 0;
+    }
+
+    private static function attributeNeedsDynamicNormalization(
+        string $attributeName,
+        string $attributeValue
+    ): bool {
+        return strpbrk($attributeName, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') !== false
+            && str_contains($attributeValue, '{')
+            && str_contains($attributeValue, '}');
     }
 
     private static function mightHaveDynamicCamelAttributes(string $html): bool
     {
         return str_contains($html, '{')
             && preg_match('/\s[a-z][\w:-]*[A-Z][\w:-]*\s*=/', $html) === 1;
-    }
-
-    /**
-     * @param array<string, mixed> $regularProps
-     * @param array<string, mixed> $eventListeners
-     * @return array<string, true>
-     */
-    private static function collectRelevantAttributeNames(array $regularProps, array $eventListeners): array
-    {
-        $relevantAttributes = [];
-
-        foreach (array_keys($regularProps) as $propName) {
-            $relevantAttributes[$propName] = true;
-            $relevantAttributes[self::camelToKebab($propName)] = true;
-        }
-
-        foreach (array_keys($eventListeners) as $eventName) {
-            $relevantAttributes[$eventName] = true;
-            $relevantAttributes[self::camelToKebab($eventName)] = true;
-        }
-
-        return $relevantAttributes;
     }
 
     /**
@@ -1047,31 +1476,85 @@ class TemplateCompiler
     }
 
     /**
-     * @return array{regularProps: array<string, mixed>, eventListeners: array<string, mixed>}
+     * @param array<string, mixed> $props
+     * @return array{
+     *   regularProps: array<string, array{rawName:string, kebabName:string, htmlName:string, value:mixed, containsMustache:bool}>,
+     *   eventListeners: array<string, array{rawName:string, kebabName:string, htmlName:string, value:mixed, containsMustache:bool}>,
+     *   relevantAttributes: array<string, true>,
+     *   scopedEventAttributes: array<string, array<string, true>>
+     * }
      */
-    private static function partitionComponentProps(array $props): array
+    private static function normalizeComponentProps(array $props, bool $buildScopedEventAttributes = false): array
     {
         $regularProps = [];
         $eventListeners = [];
+        $relevantAttributes = [];
+        $scopedEventAttributes = [];
 
         foreach ($props as $key => $value) {
-            if (str_starts_with(strtolower($key), 'on') && strlen($key) > 2) {
-                $eventListeners[$key] = $value;
+            $metadata = self::getComponentPropMetadata((string) $key);
+            $containsMustache = self::containsMustacheSyntax($value);
+
+            if ($metadata['isEvent']) {
+                $eventListeners[$key] = [
+                    'rawName' => $metadata['rawName'],
+                    'kebabName' => $metadata['kebabName'],
+                    'htmlName' => $containsMustache ? $metadata['kebabName'] : $metadata['rawName'],
+                    'value' => $value,
+                    'containsMustache' => $containsMustache,
+                ];
+                $relevantAttributes[$metadata['rawName']] = true;
+                $relevantAttributes[$metadata['kebabName']] = true;
+
+                if ($buildScopedEventAttributes) {
+                    $handlerValue = (string) $value;
+                    $scopedEventAttributes[$metadata['rawName']][$handlerValue] = true;
+                    $scopedEventAttributes[$metadata['kebabName']][$handlerValue] = true;
+                }
+
                 continue;
             }
 
-            if (
-                !isset(self::SYSTEM_PROPS[$key]) &&
-                $key !== 'children'
-            ) {
-                $regularProps[$key] = $value;
+            if (!$metadata['isSystem']) {
+                $regularProps[$key] = [
+                    'rawName' => $metadata['rawName'],
+                    'kebabName' => $metadata['kebabName'],
+                    'htmlName' => $containsMustache ? $metadata['kebabName'] : $metadata['rawName'],
+                    'value' => $value,
+                    'containsMustache' => $containsMustache,
+                ];
+                $relevantAttributes[$metadata['rawName']] = true;
+                $relevantAttributes[$metadata['kebabName']] = true;
             }
         }
 
         return [
             'regularProps' => $regularProps,
             'eventListeners' => $eventListeners,
+            'relevantAttributes' => $relevantAttributes,
+            'scopedEventAttributes' => $scopedEventAttributes,
         ];
+    }
+
+    /**
+     * @return array{rawName:string, kebabName:string, isEvent:bool, isSystem:bool}
+     */
+    private static function getComponentPropMetadata(string $key): array
+    {
+        if (isset(self::$componentPropMetadataCache[$key])) {
+            return self::$componentPropMetadataCache[$key];
+        }
+
+        $metadata = [
+            'rawName' => $key,
+            'kebabName' => self::camelToKebab($key),
+            'isEvent' => strlen($key) > 2 && str_starts_with(strtolower($key), 'on'),
+            'isSystem' => isset(self::SYSTEM_PROPS[$key]),
+        ];
+
+        self::$componentPropMetadataCache[$key] = $metadata;
+
+        return $metadata;
     }
 
     private static function needsRecompilation(string $html): bool
@@ -1328,6 +1811,269 @@ class TemplateCompiler
         return $xml;
     }
 
+    private static function tryScopeRouteRootWithoutDom(string $htmlContent, string $componentId): ?string
+    {
+        $analysis = self::analyzeSingleRootHtml($htmlContent);
+
+        if ($analysis === null) {
+            return null;
+        }
+
+        $openingTag = $analysis['openingTag'];
+
+        if (self::openingTagHasAttribute($openingTag, self::COMPONENT_ATTRIBUTE)) {
+            return $htmlContent;
+        }
+
+        $trimmedHtml = $analysis['trimmedHtml'];
+        $attributeMarkup = ' ' . self::COMPONENT_ATTRIBUTE . '="'
+            . htmlspecialchars($componentId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . '"';
+        $insertPosition = self::getOpeningTagAttributeInsertPosition($trimmedHtml, $analysis['openingTagEnd']);
+        $scopedHtml = substr($trimmedHtml, 0, $insertPosition)
+            . $attributeMarkup
+            . substr($trimmedHtml, $insertPosition);
+
+        return $analysis['leadingWhitespace'] . $scopedHtml . $analysis['trailingWhitespace'];
+    }
+
+    /**
+     * @return array{
+     *   leadingWhitespace:string,
+     *   trimmedHtml:string,
+     *   trailingWhitespace:string,
+     *   openingTag:string,
+     *   tagName:string,
+     *   openingTagEnd:int,
+     *   rootEnd:int,
+     *   selfClosing:bool
+     * }|null
+     */
+    private static function analyzeSingleRootHtml(string $htmlContent): ?array
+    {
+        if (preg_match('/\A(\s*)(.*?)(\s*)\z/s', $htmlContent, $outerMatches) !== 1) {
+            return null;
+        }
+
+        $trimmedHtml = $outerMatches[2];
+        if ($trimmedHtml === '' || !str_starts_with($trimmedHtml, '<')) {
+            return null;
+        }
+
+        if (str_starts_with($trimmedHtml, '<!--')) {
+            return null;
+        }
+
+        $openingTagEnd = self::findHtmlTagEnd($trimmedHtml, 0);
+        if ($openingTagEnd === null) {
+            return null;
+        }
+
+        $openingTag = substr($trimmedHtml, 0, $openingTagEnd + 1);
+        if (preg_match('/\A<([A-Za-z][\w:-]*)\b[\s\S]*>\z/s', $openingTag, $matches) !== 1) {
+            return null;
+        }
+
+        $tagName = strtolower($matches[1]);
+        if ($tagName === 'script' || $tagName === 'style') {
+            return null;
+        }
+
+        $selfClosing = self::isSelfClosingOpeningTag($openingTag);
+
+        if ($selfClosing) {
+            if (!self::hasOnlyWhitespaceAndCommentsAfter($trimmedHtml, $openingTagEnd + 1)) {
+                return null;
+            }
+
+            return [
+                'leadingWhitespace' => $outerMatches[1],
+                'trimmedHtml' => $trimmedHtml,
+                'trailingWhitespace' => $outerMatches[3],
+                'openingTag' => $openingTag,
+                'tagName' => $tagName,
+                'openingTagEnd' => $openingTagEnd,
+                'rootEnd' => $openingTagEnd,
+                'selfClosing' => true,
+            ];
+        }
+
+        $depth = 1;
+        $cursor = $openingTagEnd + 1;
+
+        while ($depth > 0) {
+            $nextTagPos = strpos($trimmedHtml, '<', $cursor);
+            if ($nextTagPos === false) {
+                return null;
+            }
+
+            if (substr($trimmedHtml, $nextTagPos, 4) === '<!--') {
+                $commentEnd = strpos($trimmedHtml, '-->', $nextTagPos + 4);
+                if ($commentEnd === false) {
+                    return null;
+                }
+
+                $cursor = $commentEnd + 3;
+                continue;
+            }
+
+            if (substr($trimmedHtml, $nextTagPos, 9) === '<![CDATA[') {
+                $cdataEnd = strpos($trimmedHtml, ']]>', $nextTagPos + 9);
+                if ($cdataEnd === false) {
+                    return null;
+                }
+
+                $cursor = $cdataEnd + 3;
+                continue;
+            }
+
+            if (substr($trimmedHtml, $nextTagPos, 2) === '<?') {
+                $processingInstructionEnd = strpos($trimmedHtml, '?>', $nextTagPos + 2);
+                if ($processingInstructionEnd === false) {
+                    return null;
+                }
+
+                $cursor = $processingInstructionEnd + 2;
+                continue;
+            }
+
+            if (str_starts_with(substr($trimmedHtml, $nextTagPos), '<!DOCTYPE')) {
+                return null;
+            }
+
+            $tagEnd = self::findHtmlTagEnd($trimmedHtml, $nextTagPos);
+            if ($tagEnd === null) {
+                return null;
+            }
+
+            $tagMarkup = substr($trimmedHtml, $nextTagPos, $tagEnd - $nextTagPos + 1);
+
+            if (preg_match('/\A<\/([A-Za-z][\w:-]*)\b[^>]*>\z/s', $tagMarkup, $tagMatch) === 1) {
+                if (strtolower($tagMatch[1]) === $tagName) {
+                    $depth--;
+                }
+
+                $cursor = $tagEnd + 1;
+                continue;
+            }
+
+            if (preg_match('/\A<([A-Za-z][\w:-]*)\b[\s\S]*>\z/s', $tagMarkup, $tagMatch) !== 1) {
+                return null;
+            }
+
+            $currentTagName = strtolower($tagMatch[1]);
+            $currentSelfClosing = self::isSelfClosingOpeningTag($tagMarkup);
+
+            if (($currentTagName === 'script' || $currentTagName === 'style') && !$currentSelfClosing) {
+                $closingTagPos = stripos($trimmedHtml, '</' . $currentTagName, $tagEnd + 1);
+                if ($closingTagPos === false) {
+                    return null;
+                }
+
+                $closingTagEnd = self::findHtmlTagEnd($trimmedHtml, $closingTagPos);
+                if ($closingTagEnd === null) {
+                    return null;
+                }
+
+                $cursor = $closingTagEnd + 1;
+                continue;
+            }
+
+            if ($currentTagName === $tagName && !$currentSelfClosing) {
+                $depth++;
+            }
+
+            $cursor = $tagEnd + 1;
+        }
+
+        if (!self::hasOnlyWhitespaceAndCommentsAfter($trimmedHtml, $cursor)) {
+            return null;
+        }
+
+        return [
+            'leadingWhitespace' => $outerMatches[1],
+            'trimmedHtml' => $trimmedHtml,
+            'trailingWhitespace' => $outerMatches[3],
+            'openingTag' => $openingTag,
+            'tagName' => $tagName,
+            'openingTagEnd' => $openingTagEnd,
+            'rootEnd' => $cursor - 1,
+            'selfClosing' => false,
+        ];
+    }
+
+    private static function findHtmlTagEnd(string $html, int $start): ?int
+    {
+        $length = strlen($html);
+        $quote = null;
+
+        for ($index = $start + 1; $index < $length; $index++) {
+            $char = $html[$index];
+
+            if ($quote !== null) {
+                if ($char === $quote) {
+                    $quote = null;
+                }
+
+                continue;
+            }
+
+            if ($char === '"' || $char === "'") {
+                $quote = $char;
+                continue;
+            }
+
+            if ($char === '>') {
+                return $index;
+            }
+        }
+
+        return null;
+    }
+
+    private static function isSelfClosingOpeningTag(string $tagMarkup): bool
+    {
+        $index = strlen($tagMarkup) - 2;
+
+        while ($index >= 0 && ctype_space($tagMarkup[$index])) {
+            $index--;
+        }
+
+        return $index >= 0 && $tagMarkup[$index] === '/';
+    }
+
+    private static function hasOnlyWhitespaceAndCommentsAfter(string $html, int $offset): bool
+    {
+        $remainder = substr($html, $offset);
+        if ($remainder === '') {
+            return true;
+        }
+
+        $remainderWithoutComments = preg_replace('/<!--([\s\S]*?)-->/', '', $remainder);
+
+        return trim($remainderWithoutComments ?? '') === '';
+    }
+
+    private static function openingTagHasAttribute(string $openingTag, string $attributeName): bool
+    {
+        return preg_match('/\b' . preg_quote($attributeName, '/') . '\s*=\s*/i', $openingTag) === 1;
+    }
+
+    private static function getOpeningTagAttributeInsertPosition(string $html, int $openingTagEnd): int
+    {
+        $insertPosition = $openingTagEnd;
+
+        while ($insertPosition > 0 && ctype_space($html[$insertPosition - 1])) {
+            $insertPosition--;
+        }
+
+        if ($insertPosition > 0 && $html[$insertPosition - 1] === '/') {
+            return $insertPosition - 1;
+        }
+
+        return $insertPosition;
+    }
+
     private static function createDomForSingleRootValidation(
         string $htmlContent,
         string $filePath,
@@ -1358,36 +2104,15 @@ class TemplateCompiler
 
         if (!$wrapper) {
             throw new RuntimeException(
-                sprintf('%s does not contain a valid root wrapper. File: %s', $contextLabel, $filePath)
+                sprintf(
+                    '%s missing XML wrapper during single-root validation. File: %s',
+                    $contextLabel,
+                    $filePath
+                )
             );
         }
 
-        $significantNodes = self::collectSignificantTopLevelNodes($wrapper);
-
-        if (count($significantNodes) !== 1 || !$significantNodes[0] instanceof DOMElement) {
-            $nodeSummary = self::describeTopLevelNodes($significantNodes);
-            $message = sprintf(
-                '%s must render exactly one parent HTML element, and any inline <script> must stay inside that root. File: %s',
-                $contextLabel,
-                $filePath
-            );
-
-            if ($nodeSummary !== '') {
-                $message .= '. Found: ' . $nodeSummary;
-            }
-
-            throw new RuntimeException($message);
-        }
-
-        return $significantNodes[0];
-    }
-
-    /**
-     * @return list<DOMNode>
-     */
-    private static function collectSignificantTopLevelNodes(DOMNode $wrapper): array
-    {
-        $significantNodes = [];
+        $nodes = [];
 
         foreach ($wrapper->childNodes as $node) {
             if ($node instanceof DOMComment) {
@@ -1398,30 +2123,40 @@ class TemplateCompiler
                 continue;
             }
 
-            $significantNodes[] = $node;
+            $nodes[] = $node;
         }
 
-        return $significantNodes;
+        if (count($nodes) !== 1 || !$nodes[0] instanceof DOMElement) {
+            throw new RuntimeException(
+                sprintf(
+                    '%s must render exactly one top-level HTML element. File: %s. Found: %s',
+                    $contextLabel,
+                    $filePath,
+                    self::describeNodes($nodes)
+                )
+            );
+        }
+
+        return $nodes[0];
     }
 
     /**
      * @param list<DOMNode> $nodes
      */
-    private static function describeTopLevelNodes(array $nodes): string
+    private static function describeNodes(array $nodes): string
     {
         if ($nodes === []) {
-            return 'no top-level HTML element';
+            return 'none';
         }
 
         $descriptions = array_map(
             static function (DOMNode $node): string {
-                if ($node instanceof DOMElement) {
-                    return '<' . strtolower($node->tagName) . '>';
+                if ($node instanceof DOMComment) {
+                    return 'comment';
                 }
 
                 if ($node instanceof DOMText) {
-                    $text = preg_replace('/\s+/', ' ', trim($node->textContent)) ?? '';
-                    $text = substr($text, 0, 40);
+                    $text = trim($node->textContent);
 
                     if ($text === '') {
                         return 'text';
@@ -1448,6 +2183,10 @@ class TemplateCompiler
 
     private static function preprocessFragmentSyntax(string $content): string
     {
+        if (!str_contains($content, '<>') && !str_contains($content, '</>')) {
+            return $content;
+        }
+
         return str_replace(['<>', '</>'], ['<Fragment>', '</Fragment>'], $content);
     }
 
@@ -1503,16 +2242,32 @@ class TemplateCompiler
      */
     public static function camelToKebab(string $string, array $systemProps = []): string
     {
+        $originalString = $string;
+
+        if ($systemProps === [] && isset(self::$camelToKebabCache[$string])) {
+            return self::$camelToKebabCache[$string];
+        }
+
         $systemProps = $systemProps ?: self::SYSTEM_PROPS;
 
         if (isset($systemProps[$string]) || str_contains($string, '-')) {
+            if ($systemProps === self::SYSTEM_PROPS) {
+                self::$camelToKebabCache[$string] = $string;
+            }
+
             return $string;
         }
 
         $string = preg_replace('/([a-z\d])([A-Z])/', '$1-$2', $string);
         $string = preg_replace('/([A-Z]+)([A-Z][a-z])/', '$1-$2', $string);
 
-        return strtolower($string);
+        $converted = strtolower($string);
+
+        if ($systemProps === self::SYSTEM_PROPS) {
+            self::$camelToKebabCache[$originalString] = $converted;
+        }
+
+        return $converted;
     }
 
     /**
