@@ -496,7 +496,15 @@ class Request
     private static function getHeaderValue(string $name): ?string
     {
         $headers = self::getNormalizedHeaders();
-        $hyphenatedName = strtolower(str_replace('_', '-', $name));
+        $normalizedName = strtolower($name);
+
+        if (str_starts_with($normalizedName, 'http_')) {
+            $normalizedName = substr($normalizedName, 5);
+        } elseif (str_starts_with($normalizedName, 'http-')) {
+            $normalizedName = substr($normalizedName, 5);
+        }
+
+        $hyphenatedName = str_replace('_', '-', $normalizedName);
         $underscoredName = str_replace('-', '_', $hyphenatedName);
 
         return $headers[$hyphenatedName] ?? $headers[$underscoredName] ?? null;
