@@ -158,7 +158,9 @@ class TemplateCompiler
             }
 
             $dom = self::convertToXml($templateContent);
-            return self::processChildNodes($dom->documentElement->childNodes);
+            return self::unwrapPulsePointScriptCdata(
+                self::processChildNodes($dom->documentElement->childNodes)
+            );
         } finally {
             self::$compileDepth--;
         }
@@ -570,6 +572,29 @@ class TemplateCompiler
     private static function processScriptsInContent(string $content, callable $callback): string
     {
         return preg_replace_callback(self::getPattern('script'), $callback, $content) ?? $content;
+    }
+
+    private static function unwrapPulsePointScriptCdata(string $html): string
+    {
+        if (!str_contains($html, 'text/pp') || !str_contains($html, '<![CDATA[')) {
+            return $html;
+        }
+
+        return self::processScriptsInContent(
+            $html,
+            static function (array $matches): string {
+                $type = self::extractScriptType($matches[1]);
+
+                if ($type !== 'text/pp' || !str_contains($matches[2], '<![CDATA[')) {
+                    return $matches[0];
+                }
+
+                $code = preg_replace('/^\s*<!\[CDATA\[\s*|\s*\]\]>\s*$/', '', $matches[2]) ?? $matches[2];
+                $code = str_replace(']]]]><![CDATA[>', ']]>', $code);
+
+                return "<script{$matches[1]}>{$code}</script>";
+            }
+        );
     }
 
     protected static function processNode(DOMNode $node): string

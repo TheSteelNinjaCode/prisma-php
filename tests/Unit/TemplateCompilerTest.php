@@ -134,6 +134,17 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringContainsString('<template pp-owner="parent"><button on-click="{save}">', $output);
     }
 
+    public function testCompileKeepsPulsePointScriptsRawWithoutCdataWrapper(): void
+    {
+        $html = '<div><script type="text/pp">const ready = value > 0 && enabled;</script></div>';
+        $output = TemplateCompiler::compile($html);
+
+        self::assertStringContainsString('<script type="text/pp">const ready = value > 0 && enabled;</script>', $output);
+        self::assertStringNotContainsString('<![CDATA[', $output);
+        self::assertStringNotContainsString('&amp;&amp;', $output);
+        self::assertStringNotContainsString('&gt;', $output);
+    }
+
     public function testInjectDynamicContentPlacesMetadataHeadScriptsAndFooterScripts(): void
     {
         $this->setStaticProperty(MainLayout::class, 'headScripts', new Set());
