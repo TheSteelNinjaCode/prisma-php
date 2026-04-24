@@ -24,7 +24,7 @@ final class ImportComponent
     /** @var array<string, int> */
     private static array $registeredExposedComponentMtims = [];
 
-    /** @var array<string, array{mtime:int, runner:callable}> */
+    /** @var array<string, array{mtime:int, runner:callable-string}> */
     private static array $compiledRunnerCache = [];
 
     /** @var array<string, string> */
@@ -246,7 +246,7 @@ final class ImportComponent
 
     /**
     * @param array{mtime:int, source:string, hasAttributes:bool, hasNamedFunctions:bool, supportsCompiledRunner:bool, exposedFunctionNames:list<string>, endsInPhpMode:bool, compiledPrelude:string, compiledBody:string, compiledBodyEndsInPhpMode:bool} $preparedSource
-     * @return callable(array<string, mixed>): string|null
+    * @return callable-string|null
      */
     private static function getCompiledRunner(string $filePath, array $preparedSource): ?callable
     {
@@ -294,14 +294,12 @@ final class ImportComponent
             throw new RuntimeException("Compiled component runner was not created for {$filePath}");
         }
 
-        $runnerCallable = static fn(array $__props): string => (string) call_user_func($runner, $__props);
-
         self::$compiledRunnerCache[$filePath] = [
             'mtime' => $preparedSource['mtime'],
-            'runner' => $runnerCallable,
+            'runner' => $runner,
         ];
 
-        return $runnerCallable;
+        return $runner;
     }
 
     private static function getCompiledNamespace(string $filePath, int $mtime): string
