@@ -23,7 +23,7 @@ use InvalidArgumentException;
 class TemplateCompiler
 {
     private const COMPONENT_TAG_REGEX = '/<\/*[A-Z][\w-]*/u';
-    private const SELF_CLOSING_REGEX = '/<([a-z0-9-]+)([^>]*)\/>/i';
+    private const SELF_CLOSING_REGEX = '/<((?:[a-z0-9-]+:)?[a-z0-9-]+)([^>]*)\/>/i';
     private const COMPONENT_ATTRIBUTE = 'pp-component';
     private const HEAD_PATTERNS = [
         'open' => '/(<head\b[^>]*>)/i',
@@ -326,6 +326,7 @@ class TemplateCompiler
         }
 
         $dom = clone self::$reusableDom;
+        $xml = self::normalizeSvgNamespacePrefixesForXml($xml);
         libxml_use_internal_errors(true);
 
         if (!$dom->loadXML($xml, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET | LIBXML_COMPACT)) {
@@ -338,6 +339,25 @@ class TemplateCompiler
         libxml_use_internal_errors(false);
 
         return $dom;
+    }
+
+    private static function normalizeSvgNamespacePrefixesForXml(string $xml): string
+    {
+        if (!str_contains($xml, 'xmlns:') && !str_contains($xml, ':svg') && !str_contains($xml, ':path')) {
+            return $xml;
+        }
+
+        $xml = preg_replace(
+            '/\sxmlns:([A-Za-z_][\w.-]*)="http:\/\/www\.w3\.org\/2000\/svg"/',
+            '',
+            $xml
+        ) ?? $xml;
+
+        return preg_replace(
+            '/(<\/?)([A-Za-z_][\w.-]*:)(?=(svg|path|circle|rect|line|polyline|polygon|ellipse|g|defs|mask|clipPath|foreignObject|title|desc|use|symbol|stop|linearGradient|radialGradient|filter|fe[A-Za-z]+)\b)/',
+            '$1',
+            $xml
+        ) ?? $xml;
     }
 
     private static function processChildNodes($childNodes): string
