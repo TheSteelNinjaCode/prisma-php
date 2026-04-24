@@ -24,7 +24,7 @@ final class ImportComponent
     /** @var array<string, int> */
     private static array $registeredExposedComponentMtims = [];
 
-    /** @var array<string, array{mtime:int, runner:string}> */
+    /** @var array<string, array{mtime:int, runner:callable}> */
     private static array $compiledRunnerCache = [];
 
     /** @var array<string, string> */
@@ -290,12 +290,18 @@ final class ImportComponent
             }
         }
 
+        if (!function_exists($runner)) {
+            throw new RuntimeException("Compiled component runner was not created for {$filePath}");
+        }
+
+        $runnerCallable = static fn(array $__props): string => (string) call_user_func($runner, $__props);
+
         self::$compiledRunnerCache[$filePath] = [
             'mtime' => $preparedSource['mtime'],
-            'runner' => $runner,
+            'runner' => $runnerCallable,
         ];
 
-        return $runner;
+        return $runnerCallable;
     }
 
     private static function getCompiledNamespace(string $filePath, int $mtime): string
@@ -635,16 +641,39 @@ final class ImportComponent
         $text = '';
         $tokenCount = count($tokens);
         $braceDepth = 0;
+        $interpolationDepth = 0;
         $startedBody = false;
 
         for ($cursor = $index; $cursor < $tokenCount; $cursor++) {
             $token = $tokens[$cursor];
             $text .= self::getTokenText($token);
 
+            if (is_array($token)) {
+                if (
+                    in_array(
+                        $token[0],
+                        array_filter([
+                            defined('T_CURLY_OPEN') ? T_CURLY_OPEN : null,
+                            defined('T_DOLLAR_OPEN_CURLY_BRACES') ? T_DOLLAR_OPEN_CURLY_BRACES : null,
+                        ]),
+                        true
+                    )
+                ) {
+                    $interpolationDepth++;
+                }
+
+                continue;
+            }
+
             if ($token === '{') {
                 $braceDepth++;
                 $startedBody = true;
             } elseif ($token === '}') {
+                if ($interpolationDepth > 0) {
+                    $interpolationDepth--;
+                    continue;
+                }
+
                 $braceDepth--;
 
                 if ($startedBody && $braceDepth === 0) {
