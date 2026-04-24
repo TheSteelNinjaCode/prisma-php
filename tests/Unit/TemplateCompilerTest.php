@@ -114,8 +114,9 @@ final class TemplateCompilerTest extends TestCase
         $html = '<div><template pp-owner="child"><button onClick="{save}"></button></template><button onClick="{save}"></button><button onClick="{skip}"></button></div>';
         $output = $method->invoke(null, $html, 's1', ['onClick' => '{save}'], 'parent');
 
-        self::assertSame(2, substr_count($output, 'pp-owner="parent"'));
+        self::assertSame(1, substr_count($output, 'pp-owner="parent"'));
         self::assertSame(1, substr_count($output, 'pp-owner="child"'));
+        self::assertStringStartsWith('<div pp-component="s1">', $output);
         self::assertStringContainsString('<template pp-owner="parent"><button on-click="{save}"></button></template>', $output);
         self::assertStringContainsString('<button on-click="{skip}"></button>', $output);
     }
@@ -129,6 +130,7 @@ final class TemplateCompilerTest extends TestCase
         $output = $method->invoke(null, $html, 's1', ['title' => 'Root', 'onClick' => '{save}'], 'parent');
 
         self::assertSame(1, substr_count($output, 'title="'));
+        self::assertStringStartsWith('<div pp-component="s1">', $output);
         self::assertStringNotContainsString('<div pp-component="s1" title="Root">', $output);
         self::assertStringContainsString('<span title="child"></span>', $output);
         self::assertStringContainsString('<template pp-owner="parent"><button on-click="{save}">', $output);

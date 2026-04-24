@@ -550,6 +550,10 @@ class TemplateCompiler
             }
 
             $code = str_replace(']]>', ']]]]><![CDATA[>', $m[2]);
+            if ($type === 'text/pp') {
+                return "<script{$m[1]}><![CDATA[{$code}]]></script>";
+            }
+
             return "<script{$m[1]}><![CDATA[\n{$code}\n]]></script>";
         };
 
@@ -589,7 +593,12 @@ class TemplateCompiler
                     return $matches[0];
                 }
 
-                $code = preg_replace('/^\s*<!\[CDATA\[\s*|\s*\]\]>\s*$/', '', $matches[2]) ?? $matches[2];
+                if (preg_match('/^\s*<!\[CDATA\[(.*)\]\]>\s*$/s', $matches[2], $cdataMatches) === 1) {
+                    $code = $cdataMatches[1];
+                } else {
+                    $code = $matches[2];
+                }
+
                 $code = str_replace(']]]]><![CDATA[>', ']]>', $code);
 
                 return "<script{$matches[1]}>{$code}</script>";
@@ -2057,49 +2066,41 @@ class TemplateCompiler
 
     private static function extractOwnedPassthroughChildRoot(string $htmlContent): ?string
     {
-        try {
-            $fragDom = self::convertToXml($htmlContent);
-        } catch (RuntimeException) {
-            return null;
-        }
-
-        $rootElement = self::getSingleFragmentRootElement($fragDom);
+        $templateAnalysis = self::analyzeSingleRootHtml($htmlContent);
 
         if (
-            !$rootElement instanceof DOMElement ||
-            strcasecmp($rootElement->tagName, 'template') !== 0 ||
-            !$rootElement->hasAttribute('pp-owner')
+            $templateAnalysis === null ||
+            $templateAnalysis['selfClosing'] ||
+            strcasecmp($templateAnalysis['tagName'], 'template') !== 0 ||
+            !self::openingTagHasAttribute($templateAnalysis['openingTag'], 'pp-owner')
         ) {
             return null;
         }
 
-        $childNodes = [];
+        $closingTagStart = strripos(
+            substr($templateAnalysis['trimmedHtml'], 0, $templateAnalysis['rootEnd'] + 1),
+            '</' . $templateAnalysis['tagName']
+        );
 
-        foreach ($rootElement->childNodes as $child) {
-            if ($child instanceof DOMComment) {
-                continue;
-            }
-
-            if ($child instanceof DOMText && trim($child->textContent) === '') {
-                continue;
-            }
-
-            $childNodes[] = $child;
-        }
-
-        if (count($childNodes) !== 1 || !$childNodes[0] instanceof DOMElement) {
+        if ($closingTagStart === false) {
             return null;
         }
 
-        $childRoot = $childNodes[0];
+        $innerHtml = substr(
+            $templateAnalysis['trimmedHtml'],
+            strlen($templateAnalysis['openingTag']),
+            $closingTagStart - strlen($templateAnalysis['openingTag'])
+        );
+        $childAnalysis = self::analyzeSingleRootHtml($innerHtml);
 
-        if (trim($childRoot->getAttribute(self::COMPONENT_ATTRIBUTE)) === '') {
+        if (
+            $childAnalysis === null ||
+            !self::openingTagHasAttribute($childAnalysis['openingTag'], self::COMPONENT_ATTRIBUTE)
+        ) {
             return null;
         }
 
-        $childRootMarkup = $childRoot->ownerDocument?->saveXML($childRoot);
-
-        return $childRootMarkup !== false ? $childRootMarkup : null;
+        return $childAnalysis['trimmedHtml'];
     }
 
     private static function findHtmlTagEnd(string $html, int $start): ?int
