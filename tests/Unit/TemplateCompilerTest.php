@@ -36,6 +36,28 @@ final class TemplateCompilerTest extends TestCase
         $this->setStaticProperty(TemplateCompiler::class, 'componentPropMetadataCache', []);
     }
 
+    public function testCreateHtmlFragmentDomPreservesUtf8EntitiesAcrossRepeatedRoundTrips(): void
+    {
+        $html = '<div><span aria-hidden="true">&#8599;</span><span aria-hidden="true">&#9733;</span><span aria-hidden="true">&#8594;</span></div>';
+
+        $firstPass = TemplateCompiler::innerHtml(TemplateCompiler::createHtmlFragmentDom($html));
+        $secondPass = TemplateCompiler::innerHtml(TemplateCompiler::createHtmlFragmentDom($firstPass));
+
+        self::assertStringContainsString(
+            html_entity_decode('&#8599;', ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+            $firstPass
+        );
+        self::assertStringContainsString(
+            html_entity_decode('&#9733;', ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+            $firstPass
+        );
+        self::assertStringContainsString(
+            html_entity_decode('&#8594;', ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+            $firstPass
+        );
+        self::assertSame($firstPass, $secondPass);
+    }
+
     public function testCompileCacheEvictsLeastUsedEntryAndStaysBounded(): void
     {
         $firstTemplate = '<div>first</div>';

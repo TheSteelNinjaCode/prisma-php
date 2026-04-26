@@ -27,6 +27,7 @@ class TemplateCompiler
     private const COMPONENT_ATTRIBUTE = 'pp-component';
     private const FRAGMENT_WRAPPER_TAG = 'pp-fragment-root';
     private const FULL_DOCUMENT_PATTERN = '/<\s*(?:!doctype\s+html\b|html\b)/i';
+    private const UTF8_HTML_PARSER_HINT = '<?xml encoding="UTF-8">';
     private const LITERAL_TEXT_TAGS = [
         'code' => true,
         'pre' => true,
@@ -297,6 +298,7 @@ class TemplateCompiler
         libxml_use_internal_errors(true);
 
         $flags = LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET | LIBXML_COMPACT;
+        $html = self::prependUtf8ParserHint($html);
 
         if ($isFragment) {
             $flags |= LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD;
@@ -308,10 +310,31 @@ class TemplateCompiler
             throw new RuntimeException('HTML Parsing Failed: ' . implode('; ', $errors));
         }
 
+        self::removeParserHintNodes($dom);
         libxml_clear_errors();
         libxml_use_internal_errors(false);
 
         return $dom;
+    }
+
+    private static function prependUtf8ParserHint(string $html): string
+    {
+        if (preg_match('/^\s*<\?xml\b/i', $html) === 1) {
+            return $html;
+        }
+
+        return self::UTF8_HTML_PARSER_HINT . $html;
+    }
+
+    private static function removeParserHintNodes(DOMDocument $dom): void
+    {
+        for ($index = $dom->childNodes->length - 1; $index >= 0; $index--) {
+            $child = $dom->childNodes->item($index);
+
+            if ($child !== null && $child->nodeType === XML_PI_NODE) {
+                $dom->removeChild($child);
+            }
+        }
     }
 
     private static function processMarkupOutsideInlineScripts(string $content, callable $processor): string
