@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace PP\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
-use PP\PrismaPHPSettings;
 use PP\Request;
 
 final class RequestTest extends TestCase
@@ -19,7 +18,6 @@ final class RequestTest extends TestCase
         $this->sessionBackup = $_SESSION ?? [];
 
         $_SESSION = [];
-        PrismaPHPSettings::$localStoreKey = 'pp_test_local_store';
         $this->setStaticProperty(Request::class, 'rawInput', '');
         $this->setStaticProperty(Request::class, 'rawInputLoaded', false);
         $this->setStaticProperty(Request::class, 'contentTypeInfoSource', null);
@@ -66,29 +64,6 @@ final class RequestTest extends TestCase
         self::assertTrue(Request::$isWire);
         self::assertTrue(Request::$isXFileRequest);
         self::assertSame('token-123', Request::getBearerToken());
-    }
-
-    public function testGetLocalStorageNormalizesRequestJsonIntoSessionArray(): void
-    {
-        Request::$data = [
-            PrismaPHPSettings::$localStoreKey => '{"count":2}',
-        ];
-
-        $localStorage = $this->invokePrivateStaticMethod(Request::class, 'getLocalStorage');
-
-        self::assertSame(2, $localStorage['count']);
-        self::assertSame(['count' => 2], $_SESSION[PrismaPHPSettings::$localStoreKey]);
-    }
-
-    public function testGetLocalStorageNormalizesSessionJsonIntoArray(): void
-    {
-        Request::$data = [];
-        $_SESSION[PrismaPHPSettings::$localStoreKey] = '{"count":3}';
-
-        $localStorage = $this->invokePrivateStaticMethod(Request::class, 'getLocalStorage');
-
-        self::assertSame(3, $localStorage['count']);
-        self::assertSame(['count' => 3], $_SESSION[PrismaPHPSettings::$localStoreKey]);
     }
 
     public function testGetParamsUsesCachedRawInputForJsonBodies(): void

@@ -62,6 +62,8 @@ class PrismaPHPSettings
      */
     private static array $jsonFileCache = [];
 
+    private static bool $classLogFilesLoaded = false;
+
     /**
      * The settings from the prisma-php.json file.
      * 
@@ -77,7 +79,7 @@ class PrismaPHPSettings
     public static array $routeFiles = [];
 
     /**
-     * The list of class log files.
+        * The component mappings derived from component-map.json.
      * 
      * @var array
      */
@@ -90,20 +92,23 @@ class PrismaPHPSettings
      */
     public static array $includeFiles = [];
 
-    /**
-     * The local storage key for the app state.
-     *
-     * @var string
-     */
-    public static string $localStoreKey;
-
     public static function init(): void
     {
         self::$option = self::getPrismaSettings();
         self::$routeFiles = self::getRoutesFileList();
-        self::$classLogFiles = self::getClassesLogFiles();
+        self::$classLogFiles = [];
+        self::$classLogFilesLoaded = false;
         self::$includeFiles = self::getIncludeFiles();
-        self::$localStoreKey = self::getLocalStorageKey();
+    }
+
+    public static function getClassLogFiles(): array
+    {
+        if (!self::$classLogFilesLoaded) {
+            self::$classLogFiles = self::getClassesLogFiles();
+            self::$classLogFilesLoaded = true;
+        }
+
+        return self::$classLogFiles;
     }
 
     /**
@@ -126,18 +131,37 @@ class PrismaPHPSettings
 
     private static function getClassesLogFiles(): array
     {
-        return self::readJsonFile(SETTINGS_PATH . '/class-imports.json');
+        $componentMap = self::readJsonFile(SETTINGS_PATH . '/component-map.json');
+        $mappings = [];
+
+        foreach ($componentMap as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $tagName = strtolower((string) ($entry['tagName'] ?? ''));
+            $componentName = (string) ($entry['componentName'] ?? '');
+            $className = (string) ($entry['importRoute'] ?? '');
+            $filePath = (string) ($entry['filePath'] ?? '');
+
+            if ($tagName === '' || $className === '' || $filePath === '') {
+                continue;
+            }
+
+            $mappings[$tagName][] = [
+                'tagName' => $tagName,
+                'componentName' => $componentName,
+                'className' => $className,
+                'filePath' => $filePath,
+            ];
+        }
+
+        return $mappings;
     }
 
     private static function getIncludeFiles(): array
     {
         return self::readJsonFile(SETTINGS_PATH . '/request-data.json');
-    }
-
-    private static function getLocalStorageKey(): string
-    {
-        $localStorageKey = Env::string('LOCALSTORE_KEY', 'pp_local_store_59e13');
-        return strtolower(preg_replace('/\s+/', '_', trim($localStorageKey)));
     }
 
     /**

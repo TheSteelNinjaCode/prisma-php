@@ -16,6 +16,7 @@ final class TemplateCompilerTest extends TestCase
     {
         PrismaPHPSettings::$classLogFiles = [];
 
+        $this->setStaticProperty(TemplateCompiler::class, 'classMappings', []);
         $this->setStaticProperty(TemplateCompiler::class, 'compiledCache', []);
         $this->setStaticProperty(TemplateCompiler::class, 'cacheStats', []);
         $this->setStaticProperty(TemplateCompiler::class, 'cacheEnabled', true);
@@ -25,6 +26,7 @@ final class TemplateCompilerTest extends TestCase
 
     protected function tearDown(): void
     {
+        $this->setStaticProperty(TemplateCompiler::class, 'classMappings', []);
         $this->setStaticProperty(TemplateCompiler::class, 'compiledCache', []);
         $this->setStaticProperty(TemplateCompiler::class, 'cacheStats', []);
         $this->setStaticProperty(TemplateCompiler::class, 'maxCacheSize', 100);
@@ -136,6 +138,67 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringContainsString('<template pp-owner="parent"><button on-click="{save}">', $output);
     }
 
+    public function testCompileComponentHtmlSupportsHtmlBooleanAttributesInNestedMarkup(): void
+    {
+        $method = new \ReflectionMethod(TemplateCompiler::class, 'compileComponentHtml');
+        $method->setAccessible(true);
+
+        $html = '<div><button disabled>Save</button></div>';
+        $output = $method->invoke(null, $html, 's1');
+
+        self::assertStringStartsWith('<div pp-component="s1">', $output);
+        self::assertMatchesRegularExpression('/<button[^>]*disabled(?:="(?:disabled)?")?[^>]*>Save<\/button>/', $output);
+    }
+
+    public function testCompileResolvesHtmlFirstComponentTags(): void
+    {
+        PrismaPHPSettings::$classLogFiles = [
+            'x-button' => [[
+                'className' => HtmlFirstButtonFixture::class,
+                'filePath' => __FILE__,
+            ]],
+        ];
+        $this->setStaticProperty(TemplateCompiler::class, 'classMappings', []);
+
+        $output = TemplateCompiler::compile('<div><x-button>Click Me</x-button></div>');
+
+        self::assertStringContainsString('<button', $output);
+        self::assertStringContainsString('Click Me', $output);
+        self::assertStringContainsString('pp-component="s', $output);
+        self::assertStringNotContainsString('<x-button', $output);
+    }
+
+    public function testCompileTreatsValuelessKebabBooleanPropsAsTrueWithoutLeakingAliases(): void
+    {
+        PrismaPHPSettings::$classLogFiles = [
+            'x-button' => [[
+                'className' => HtmlFirstAsChildButtonFixture::class,
+                'filePath' => __FILE__,
+            ]],
+        ];
+        $this->setStaticProperty(TemplateCompiler::class, 'classMappings', []);
+
+        $output = TemplateCompiler::compile('<div><x-button as-child>Click Me</x-button></div>');
+
+        self::assertStringContainsString('<a', $output);
+        self::assertStringContainsString('href="/"', $output);
+        self::assertStringContainsString('>Click Me</a>', $output);
+        self::assertStringNotContainsString('<button', $output);
+        self::assertStringNotContainsString('as-child', $output);
+        self::assertStringNotContainsString('aschild', $output);
+    }
+
+    public function testCompileRejectsUnknownHtmlFirstComponentTags(): void
+    {
+        PrismaPHPSettings::$classLogFiles = [];
+        $this->setStaticProperty(TemplateCompiler::class, 'classMappings', []);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage("Component 'x-button' not found.");
+
+        TemplateCompiler::compile('<div><x-button>Click Me</x-button></div>');
+    }
+
     public function testCompileKeepsPulsePointScriptsRawWithoutCdataWrapper(): void
     {
         $html = '<div><script type="text/pp">const ready = value > 0 && enabled;</script></div>';
@@ -145,6 +208,26 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringNotContainsString('<![CDATA[', $output);
         self::assertStringNotContainsString('&amp;&amp;', $output);
         self::assertStringNotContainsString('&gt;', $output);
+    }
+
+    public function testCompileKeepsMustacheComparisonOperatorsRawInHtmlText(): void
+    {
+        $html = '<div>{count < 2 ? "small" : "big"}</div>';
+        $output = TemplateCompiler::compile($html);
+
+        self::assertSame($html, $output);
+        self::assertStringNotContainsString('&lt;', $output);
+        self::assertStringNotContainsString('&gt;', $output);
+    }
+
+    public function testCompileTurnsBraceEntitiesIntoLiteralCodeText(): void
+    {
+        $html = '<div><pre><code>&lt;Calendar selected=&#123;selectedDate&#125; /&gt;</code></pre></div>';
+        $output = TemplateCompiler::compile($html);
+
+        self::assertStringContainsString('<code>&lt;Calendar selected={selectedDate} /&gt;</code>', $output);
+        self::assertStringNotContainsString('&amp;#123;', $output);
+        self::assertStringNotContainsString('&amp;#125;', $output);
     }
 
     public function testInjectDynamicContentPlacesMetadataHeadScriptsAndFooterScripts(): void
@@ -193,4 +276,29 @@ final class TemplateCompilerFixture
     public string $title;
     public ?string $children = null;
     private string $ignored = 'nope';
+}
+
+final class HtmlFirstButtonFixture extends \PP\PHPX\PHPX
+{
+    public mixed $children = null;
+
+    public function render(): string
+    {
+        return '<button>' . ($this->children ?? '') . '</button>';
+    }
+}
+
+final class HtmlFirstAsChildButtonFixture extends \PP\PHPX\PHPX
+{
+    public ?bool $asChild = false;
+    public mixed $children = null;
+
+    public function render(): string
+    {
+        if ($this->asChild) {
+            return '<a href="/">' . ($this->children ?? '') . '</a>';
+        }
+
+        return '<button>' . ($this->children ?? '') . '</button>';
+    }
 }

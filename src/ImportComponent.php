@@ -57,12 +57,12 @@ final class ImportComponent
         $newHtml = self::tryApplyRootAttributesWithoutDom($html, $serializedAttributes);
 
         if ($newHtml === null) {
-            $dom = TemplateCompiler::convertToXml($html);
+            $dom = TemplateCompiler::createHtmlFragmentDom($html);
             $rootEl = self::getSingleRootElement($dom, $filePath);
 
             self::applyAttributes($rootEl, $serializedAttributes);
 
-            $newHtml = TemplateCompiler::innerXml($dom);
+            $newHtml = TemplateCompiler::innerHtml($dom);
         }
 
         self::$sections[$filePath] = [

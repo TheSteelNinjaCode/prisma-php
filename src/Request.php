@@ -7,7 +7,6 @@ namespace PP;
 use PP\Headers\Boom;
 use ArrayObject;
 use stdClass;
-use PP\PrismaPHPSettings;
 
 class Request
 {
@@ -50,21 +49,6 @@ class Request
      * The above code will output the dynamic parameters as an array, which can be useful for debugging purposes.
      */
     public static ArrayObject $dynamicParams;
-
-    /**
-     * @var stdClass $localStorage A static property to hold request parameters.
-     * 
-     * This property is used to hold request parameters that are passed to the request.
-     * 
-     * Example usage:
-     * The parameters can be accessed using the following syntax:
-     * ```php
-     * $id = Request::$localStorage['id'];
-     * OR
-     * $id = Request::$localStorage->id;
-     * ```
-     */
-    public static ArrayObject $localStorage;
 
     /**
      * @var mixed $data Holds request data (e.g., JSON body).
@@ -242,7 +226,6 @@ class Request
         self::$isAjax = self::isAjaxRequest();
         self::$isXFileRequest = self::isXFileRequest();
         self::$params = self::getParams();
-        self::$localStorage = self::getLocalStorage();
         self::$protocol = self::getProtocol();
         self::$documentUrl = self::$protocol . self::$domainName . self::$scriptName;
         self::$remoteAddr = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
@@ -343,56 +326,6 @@ class Request
         return $params;
     }
 
-    /**
-     * Retrieves the local storage data from the session or initializes it if not present.
-     *
-     * This method checks if the local storage data is available in the static data array or the session.
-     * If the data is found, it is decoded from JSON if necessary and returned as an ArrayObject.
-     * If the data is not found, an empty ArrayObject is returned.
-     *
-     * @return ArrayObject The local storage data as an ArrayObject.
-     */
-    private static function getLocalStorage(): ArrayObject
-    {
-        $sessionKey = PrismaPHPSettings::$localStoreKey;
-        $localStorage = new ArrayObject([], ArrayObject::ARRAY_AS_PROPS);
-
-        if (isset(self::$data[$sessionKey])) {
-            $data = self::$data[$sessionKey];
-
-            if (is_array($data)) {
-                $_SESSION[$sessionKey] = $data;
-                $localStorage = new ArrayObject($data, ArrayObject::ARRAY_AS_PROPS);
-            } else {
-                $decodedData = self::decodeArrayPayload($data);
-
-                if ($decodedData !== null) {
-                    $_SESSION[$sessionKey] = $decodedData;
-                    $localStorage = new ArrayObject($decodedData, ArrayObject::ARRAY_AS_PROPS);
-                } else {
-                    Boom::badRequest('Invalid JSON body')->toResponse();
-                }
-            }
-        } else {
-            if (isset($_SESSION[$sessionKey])) {
-                $sessionData = $_SESSION[$sessionKey];
-
-                if (is_array($sessionData)) {
-                    $localStorage = new ArrayObject($sessionData, ArrayObject::ARRAY_AS_PROPS);
-                } else {
-                    $decodedData = self::decodeArrayPayload($sessionData);
-
-                    if ($decodedData !== null) {
-                        $_SESSION[$sessionKey] = $decodedData;
-                        $localStorage = new ArrayObject($decodedData, ArrayObject::ARRAY_AS_PROPS);
-                    }
-                }
-            }
-        }
-
-        return $localStorage;
-    }
-
     private static function getRawInput(): string
     {
         if (!self::$rawInputLoaded) {
@@ -402,19 +335,6 @@ class Request
         }
 
         return self::$rawInput;
-    }
-
-    private static function decodeArrayPayload(mixed $payload): ?array
-    {
-        if (!is_string($payload)) {
-            return null;
-        }
-
-        $decodedData = json_decode($payload, true);
-
-        return is_array($decodedData) && json_last_error() === JSON_ERROR_NONE
-            ? $decodedData
-            : null;
     }
 
     private static function isJsonContentType(string $contentType): bool

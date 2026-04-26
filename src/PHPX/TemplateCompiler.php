@@ -22,17 +22,11 @@ use InvalidArgumentException;
 
 class TemplateCompiler
 {
-    private const COMPONENT_TAG_REGEX = '/<\/*[A-Z][\w-]*/u';
-    private const SELF_CLOSING_REGEX = '/<((?:[a-z0-9-]+:)?[a-z0-9-]+)([^>]*)\/>/i';
+    private const COMPONENT_TAG_REGEX = '/<\/?(?:[A-Z][\w.-]*|x-[a-z0-9][\w.-]*)\b/u';
+    private const SELF_CLOSING_REGEX = '/<((?:[a-z0-9-]+:)?[a-z0-9][a-z0-9.-]*)([^>]*)\/>/i';
     private const COMPONENT_ATTRIBUTE = 'pp-component';
-    private const HEAD_PATTERNS = [
-        'open' => '/(<head\b[^>]*>)/i',
-        'close' => '/(<\/head\s*>)/i',
-    ];
-    private const BODY_PATTERNS = [
-        'open' => '/<body([^>]*)>/i',
-        'close' => '/(<\/body\s*>)/i',
-    ];
+    private const FRAGMENT_WRAPPER_TAG = 'pp-fragment-root';
+    private const FULL_DOCUMENT_PATTERN = '/<\s*(?:!doctype\s+html\b|html\b)/i';
     private const LITERAL_TEXT_TAGS = [
         'code' => true,
         'pre' => true,
@@ -66,14 +60,6 @@ class TemplateCompiler
         'track' => true,
         'wbr' => true,
     ];
-    private const SCRIPT_TYPES = [
-        '' => true,
-        'text/javascript' => true,
-        'application/javascript' => true,
-        'module' => true,
-        'text/pp' => true,
-    ];
-
     private static array $classMappings = [];
     private static array $reflectionCache = [];
     private static array $sectionStack = [];
@@ -157,10 +143,12 @@ class TemplateCompiler
                 self::initializeClassMappings();
             }
 
-            $dom = self::convertToXml($templateContent);
-            return self::unwrapPulsePointScriptCdata(
-                self::processChildNodes($dom->documentElement->childNodes)
-            );
+            $isFullDocument = self::isFullHtmlDocument($templateContent);
+            $dom = self::createHtmlDom($templateContent);
+
+            return $isFullDocument
+                ? self::processNode($dom->documentElement)
+                : self::processChildNodes($dom->documentElement->childNodes);
         } finally {
             self::$compileDepth--;
         }
@@ -184,7 +172,7 @@ class TemplateCompiler
 
         $rootElement->setAttribute(self::COMPONENT_ATTRIBUTE, $componentId);
 
-        return self::innerXml($dom);
+        return self::innerHtml($dom);
     }
 
     public static function validateSingleRootHtml(
@@ -242,55 +230,35 @@ class TemplateCompiler
         return $htmlContent;
     }
 
-    public static function convertToXml(string $templateContent): DOMDocument
+    public static function createHtmlFragmentDom(string $templateContent): DOMDocument
     {
-        $content = self::processContentForXml($templateContent);
-        $xml = "<root>{$content}</root>";
+        $html = '<' . self::FRAGMENT_WRAPPER_TAG . '>'
+            . self::prepareMarkupForHtmlDom($templateContent)
+            . '</' . self::FRAGMENT_WRAPPER_TAG . '>';
 
-        return self::createDomFromXml($xml);
+        return self::createDomFromHtml($html, true);
     }
 
-    private static function processContentForXml(string $content): string
+    private static function createHtmlDom(string $templateContent): DOMDocument
     {
-        return self::escapeAttributeAngles(
-            self::escapeLiteralTextContent(
-                self::escapeAmpersands(
-                    self::protectCurlyNumericEntities(
-                        self::normalizeNamedEntities(
-                            self::escapeMustacheOperators(
-                                self::protectInlineScripts($content)
-                            )
-                        )
-                    )
-                )
-            )
-        );
-    }
-
-    private static function protectCurlyNumericEntities(string $html): string
-    {
-        if (!str_contains($html, '&#')) {
-            return $html;
+        if (self::isFullHtmlDocument($templateContent)) {
+            return self::createDomFromHtml(self::prepareMarkupForHtmlDom($templateContent), false);
         }
 
-        return preg_replace_callback(
-            self::getPattern('numeric_entity'),
-            static function (array $m): string {
-                $num = $m[1];
+        return self::createHtmlFragmentDom($templateContent);
+    }
 
-                $isHex = ($num[0] === 'x' || $num[0] === 'X');
-                $codepoint = $isHex
-                    ? hexdec(substr($num, 1))
-                    : (int)$num;
+    private static function isFullHtmlDocument(string $templateContent): bool
+    {
+        return preg_match(self::FULL_DOCUMENT_PATTERN, $templateContent) === 1;
+    }
 
-                if ($codepoint === 123 || $codepoint === 125) {
-                    return '&amp;#' . $num . ';';
-                }
-
-                return $m[0];
-            },
-            $html
-        ) ?? $html;
+    private static function prepareMarkupForHtmlDom(string $content): string
+    {
+        return self::processMarkupOutsideInlineScripts(
+            $content,
+            static fn(string $part): string => self::escapeMustacheOperators($part)
+        );
     }
 
 
@@ -319,20 +287,25 @@ class TemplateCompiler
         );
     }
 
-    private static function createDomFromXml(string $xml): DOMDocument
+    private static function createDomFromHtml(string $html, bool $isFragment): DOMDocument
     {
         if (self::$reusableDom === null) {
             self::$reusableDom = new DOMDocument('1.0', 'UTF-8');
         }
 
         $dom = clone self::$reusableDom;
-        $xml = self::normalizeSvgNamespacePrefixesForXml($xml);
         libxml_use_internal_errors(true);
 
-        if (!$dom->loadXML($xml, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET | LIBXML_COMPACT)) {
-            $errors = self::getXmlErrors();
+        $flags = LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET | LIBXML_COMPACT;
+
+        if ($isFragment) {
+            $flags |= LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD;
+        }
+
+        if (!$dom->loadHTML($html, $flags)) {
+            $errors = self::getMarkupErrors();
             libxml_use_internal_errors(false);
-            throw new RuntimeException('XML Parsing Failed: ' . implode('; ', $errors));
+            throw new RuntimeException('HTML Parsing Failed: ' . implode('; ', $errors));
         }
 
         libxml_clear_errors();
@@ -341,23 +314,27 @@ class TemplateCompiler
         return $dom;
     }
 
-    private static function normalizeSvgNamespacePrefixesForXml(string $xml): string
+    private static function processMarkupOutsideInlineScripts(string $content, callable $processor): string
     {
-        if (!str_contains($xml, 'xmlns:') && !str_contains($xml, ':svg') && !str_contains($xml, ':path')) {
-            return $xml;
+        if (!str_contains($content, '<script')) {
+            return $processor($content);
         }
 
-        $xml = preg_replace(
-            '/\sxmlns:([A-Za-z_][\w.-]*)="http:\/\/www\.w3\.org\/2000\/svg"/',
-            '',
-            $xml
-        ) ?? $xml;
+        $parts = preg_split('/(<script\b[\s\S]*?<\/script>)/i', $content, -1, PREG_SPLIT_DELIM_CAPTURE);
 
-        return preg_replace(
-            '/(<\/?)([A-Za-z_][\w.-]*:)(?=(svg|path|circle|rect|line|polyline|polygon|ellipse|g|defs|mask|clipPath|foreignObject|title|desc|use|symbol|stop|linearGradient|radialGradient|filter|fe[A-Za-z]+)\b)/',
-            '$1',
-            $xml
-        ) ?? $xml;
+        if ($parts === false) {
+            return $content;
+        }
+
+        foreach ($parts as $index => $part) {
+            if ($part === '' || preg_match('/\A<script\b/i', $part) === 1) {
+                continue;
+            }
+
+            $parts[$index] = $processor($part);
+        }
+
+        return implode('', $parts);
     }
 
     private static function processChildNodes($childNodes): string
@@ -379,11 +356,8 @@ class TemplateCompiler
                 'script_src' => '/\bsrc\s*=/i',
                 'script_type' => '/\btype\s*=\s*([\'"]?)([^\'"\s>]+)/i',
 
-                // Mustache and entities
+                // Mustache
                 'mustache' => '/\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/',
-                'named_entity' => '/&([a-zA-Z][a-zA-Z0-9]+);/',
-                'numeric_entity' => '/&#(x?[0-9A-Fa-f]+);/i',
-                'unescaped_ampersand' => '/&(?![a-zA-Z][A-Za-z0-9]*;|#[0-9]+;|#x[0-9A-Fa-f]+;)/',
 
                 // Attributes and tags
                 'attribute' => '/(\s[\w:-]+=)([\'"])(.*?)\2/s',
@@ -399,128 +373,6 @@ class TemplateCompiler
         }
 
         return self::$compiledPatterns[$key];
-    }
-
-    private static function escapeAmpersands(string $content): string
-    {
-        if (!str_contains($content, '&')) {
-            return $content;
-        }
-
-        return self::processCDataAwareParts(
-            $content,
-            static fn(string $part): string => preg_replace(
-                self::getPattern('unescaped_ampersand'),
-                '&amp;',
-                $part
-            )
-        );
-    }
-
-    private static function escapeAttributeAngles(string $html): string
-    {
-        if (!preg_match('/\s[\w:-]+\s*=\s*(["\'])[^"\']*[<>][^"\']*\1/s', $html)) {
-            return $html;
-        }
-
-        return self::processCDataAwareParts(
-            $html,
-            static function (string $part): string {
-                return preg_replace_callback(
-                    self::getPattern('attribute'),
-                    static function (array $m): string {
-                        if (!str_contains($m[3], '<') && !str_contains($m[3], '>')) {
-                            return $m[0];
-                        }
-
-                        return $m[1] . $m[2] .
-                            str_replace(['<', '>'], ['&lt;', '&gt;'], $m[3]) . $m[2];
-                    },
-                    $part
-                );
-            }
-        );
-    }
-
-    private static function escapeLiteralTextContent(string $content): string
-    {
-        static $quickCheck = null;
-        if ($quickCheck === null) {
-            $quickCheck = '/<(?:code|pre|samp|kbd|var)\b/i';
-        }
-
-        if (!preg_match($quickCheck, $content)) {
-            return $content;
-        }
-
-        return self::processCDataAwareParts(
-            $content,
-            static function (string $part): string {
-                return preg_replace_callback(
-                    self::getPattern('literal_text_tags'),
-                    static function (array $matches): string {
-                        $openTag = $matches[1];
-                        $textContent = $matches[2];
-                        $closeTag = $matches[3];
-
-                        if (!str_contains($textContent, '<') && !str_contains($textContent, '>')) {
-                            return $matches[0];
-                        }
-
-                        $escapedContent = preg_replace_callback(
-                            self::getPattern('literal_text_operators'),
-                            static function (array $match): string {
-                                $operator = $match[2];
-                                $escapedOp = str_replace(['<', '>'], ['&lt;', '&gt;'], $operator);
-                                return $match[1] . $escapedOp . $match[3];
-                            },
-                            $textContent
-                        );
-
-                        return $openTag . $escapedContent . $closeTag;
-                    },
-                    $part
-                );
-            }
-        );
-    }
-
-    private static function normalizeNamedEntities(string $html): string
-    {
-        if (!str_contains($html, '&')) {
-            return $html;
-        }
-
-        static $hasMbOrd = null;
-        if ($hasMbOrd === null) {
-            $hasMbOrd = function_exists('mb_ord');
-        }
-
-        return self::processCDataAwareParts(
-            $html,
-            static function (string $part) use ($hasMbOrd): string {
-                if (!preg_match('/&[a-zA-Z]/', $part)) {
-                    return $part;
-                }
-
-                return preg_replace_callback(
-                    self::getPattern('named_entity'),
-                    static function (array $m) use ($hasMbOrd): string {
-                        $decoded = html_entity_decode($m[0], ENT_HTML5, 'UTF-8');
-                        if ($decoded === $m[0]) {
-                            return $m[0];
-                        }
-
-                        $code = $hasMbOrd
-                            ? mb_ord($decoded, 'UTF-8')
-                            : unpack('N', mb_convert_encoding($decoded, 'UCS-4BE', 'UTF-8'))[1];
-
-                        return '&#' . $code . ';';
-                    },
-                    $part
-                );
-            }
-        );
     }
 
     private static function processCDataAwareParts(string $content, callable $processor): string
@@ -547,83 +399,6 @@ class TemplateCompiler
         }
 
         return implode('', $parts);
-    }
-
-    private static function protectInlineScripts(string $html): string
-    {
-        if (!str_contains($html, '<script')) {
-            return $html;
-        }
-
-        $callback = static function (array $m): string {
-            if (preg_match(self::getPattern('script_src'), $m[1])) {
-                return $m[0];
-            }
-
-            if (str_contains($m[2], '<![CDATA[')) {
-                return $m[0];
-            }
-
-            $type = self::extractScriptType($m[1]);
-            if (!isset(self::SCRIPT_TYPES[$type])) {
-                return $m[0];
-            }
-
-            $code = str_replace(']]>', ']]]]><![CDATA[>', $m[2]);
-            if ($type === 'text/pp') {
-                return "<script{$m[1]}><![CDATA[{$code}]]></script>";
-            }
-
-            return "<script{$m[1]}><![CDATA[\n{$code}\n]]></script>";
-        };
-
-        if (preg_match('/^(.*?<body\b[^>]*>)(.*?)(<\/body>.*)$/is', $html, $parts)) {
-            [, $beforeBody, $body, $afterBody] = $parts;
-            return $beforeBody . self::processScriptsInContent($body, $callback) . $afterBody;
-        }
-
-        return self::processScriptsInContent($html, $callback);
-    }
-
-    private static function extractScriptType(string $attributes): string
-    {
-        if (preg_match(self::getPattern('script_type'), $attributes, $matches)) {
-            return strtolower($matches[2]);
-        }
-        return '';
-    }
-
-    private static function processScriptsInContent(string $content, callable $callback): string
-    {
-        return preg_replace_callback(self::getPattern('script'), $callback, $content) ?? $content;
-    }
-
-    private static function unwrapPulsePointScriptCdata(string $html): string
-    {
-        if (!str_contains($html, 'text/pp') || !str_contains($html, '<![CDATA[')) {
-            return $html;
-        }
-
-        return self::processScriptsInContent(
-            $html,
-            static function (array $matches): string {
-                $type = self::extractScriptType($matches[1]);
-
-                if ($type !== 'text/pp' || !str_contains($matches[2], '<![CDATA[')) {
-                    return $matches[0];
-                }
-
-                if (preg_match('/^\s*<!\[CDATA\[(.*)\]\]>\s*$/s', $matches[2], $cdataMatches) === 1) {
-                    $code = $cdataMatches[1];
-                } else {
-                    $code = $matches[2];
-                }
-
-                $code = str_replace(']]]]><![CDATA[>', ']]>', $code);
-
-                return "<script{$matches[1]}>{$code}</script>";
-            }
-        );
     }
 
     protected static function processNode(DOMNode $node): string
@@ -653,15 +428,17 @@ class TemplateCompiler
         }
 
         try {
-            if (isset(self::$classMappings[$node->nodeName])) {
+            $componentLookupKey = self::resolveRegisteredComponentKey($node->nodeName);
+
+            if ($componentLookupKey !== null) {
                 return self::renderComponent(
                     $node,
-                    $node->nodeName,
+                    $componentLookupKey,
                     self::getNodeAttributes($node)
                 );
             }
 
-            if (preg_match('/^[A-Z]/', $node->nodeName)) {
+            if (self::isHtmlComponentTagName($node->nodeName)) {
                 throw new RuntimeException(
                     "Component '{$node->nodeName}' not found. Make sure it's properly registered."
                 );
@@ -774,8 +551,7 @@ class TemplateCompiler
 
         $parentContext = self::getCurrentContext();
 
-        $componentFilePath = SRC_PATH . '/' . str_replace('\\', '/', $mapping['filePath']);
-        $componentFilePath = str_replace('\\', '/', $componentFilePath);
+        $componentFilePath = self::resolveComponentFilePath($mapping['filePath']);
 
         self::$sectionStack[] = $sectionId;
         self::$contextStack[] = $sectionId;
@@ -794,10 +570,14 @@ class TemplateCompiler
                 );
             }
 
+            $serializableIncomingProps = $instance instanceof PHPX
+                ? $instance->filterIncomingPropsForRootSerialization($incomingProps)
+                : $incomingProps;
+
             return self::compileComponentHtml(
                 $instance->render(),
                 $sectionId,
-                $incomingProps,
+                $serializableIncomingProps,
                 $parentContext
             );
         } finally {
@@ -916,7 +696,7 @@ class TemplateCompiler
             }
         }
 
-        $fragDom = self::convertToXml($html);
+        $fragDom = self::createHtmlFragmentDom($html);
         $rootElement = self::getSingleFragmentRootElement($fragDom);
 
         if ($rootElement !== null && $parentContext === '') {
@@ -1015,7 +795,7 @@ class TemplateCompiler
             }
         }
 
-        $htmlOut = self::innerXml($fragDom);
+        $htmlOut = self::innerHtml($fragDom);
 
         if ($needsScope && $rootElement && !empty($parentContext)) {
             $htmlOut = self::wrapHtmlWithOwnerTemplate($htmlOut, $parentContext);
@@ -1192,7 +972,7 @@ class TemplateCompiler
             );
         }
 
-        $htmlOut = self::innerXml($fragDom);
+        $htmlOut = self::innerHtml($fragDom);
         $htmlOut = self::normalizeSelfClosingTags($htmlOut);
 
         if (self::needsRecompilation($htmlOut)) {
@@ -1241,7 +1021,7 @@ class TemplateCompiler
         bool $normalizeDynamicAttributes,
         bool $selfClosing
     ): ?array {
-        if (preg_match('/\A<([A-Za-z][\w:-]*)\b([\s\S]*?)>\z/s', $openingTag, $matches) !== 1) {
+        if (preg_match('/\A<([A-Za-z][\w:.-]*)\b([\s\S]*?)>\z/s', $openingTag, $matches) !== 1) {
             return null;
         }
 
@@ -1627,12 +1407,8 @@ class TemplateCompiler
 
     private static function needsRecompilation(string $html): bool
     {
-        if (stripos($html, '<script') !== false) {
-            return true;
-        }
-
-        return strpbrk($html, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') !== false
-            && preg_match(self::COMPONENT_TAG_REGEX, $html) === 1;
+        return stripos($html, '<script') !== false
+            || preg_match(self::COMPONENT_TAG_REGEX, $html) === 1;
     }
 
     private static function normalizeSelfClosingTags(string $html): string
@@ -1667,12 +1443,30 @@ class TemplateCompiler
     private static function ensureClassLoaded(string $className, string $filePath): void
     {
         if (!class_exists($className)) {
-            require_once str_replace('\\', '/', SRC_PATH . '/' . $filePath);
+            require_once self::resolveComponentFilePath($filePath);
 
             if (!class_exists($className)) {
                 throw new RuntimeException("Class {$className} not found");
             }
         }
+    }
+
+    private static function resolveComponentFilePath(string $filePath): string
+    {
+        $normalizedPath = str_replace('\\', '/', $filePath);
+
+        if (
+            preg_match('/^[A-Za-z]:\//', $normalizedPath) === 1 ||
+            str_starts_with($normalizedPath, '/')
+        ) {
+            return $normalizedPath;
+        }
+
+        if (str_starts_with($normalizedPath, 'src/')) {
+            return str_replace('\\', '/', dirname(SRC_PATH) . '/' . $normalizedPath);
+        }
+
+        return str_replace('\\', '/', SRC_PATH . '/' . ltrim($normalizedPath, '/'));
     }
 
     private static function getClassReflection(string $className): array
@@ -1736,6 +1530,8 @@ class TemplateCompiler
 
     private static function selectComponentMapping(string $componentName): array
     {
+        $componentName = self::resolveRegisteredComponentKey($componentName) ?? $componentName;
+
         if (!isset(self::$classMappings[$componentName])) {
             throw new RuntimeException("Component {$componentName} not registered");
         }
@@ -1810,9 +1606,9 @@ class TemplateCompiler
     private static function normalizePathForComparison(string $path): string
     {
         $path = str_replace('\\', '/', $path);
-        $srcPath = str_replace('\\', '/', SRC_PATH);
+        $srcPath = defined('SRC_PATH') ? str_replace('\\', '/', SRC_PATH) : '';
 
-        if (str_starts_with($path, $srcPath)) {
+        if ($srcPath !== '' && str_starts_with($path, $srcPath)) {
             $path = substr($path, strlen($srcPath));
             $path = ltrim($path, '/');
         }
@@ -1856,10 +1652,49 @@ class TemplateCompiler
         $parts = explode('\\', $className);
         $lastPart = end($parts);
 
-        return $componentName === $lastPart;
+        return self::normalizeHtmlComponentName($componentName) === $lastPart;
     }
 
-    public static function innerXml(DOMNode $node): string
+    private static function resolveRegisteredComponentKey(string $componentName): ?string
+    {
+        if (!self::isHtmlComponentTagName($componentName)) {
+            return null;
+        }
+
+        if (isset(self::$classMappings[$componentName])) {
+            return $componentName;
+        }
+
+        return null;
+    }
+
+    private static function normalizeHtmlComponentName(string $componentName): string
+    {
+        if (!self::isHtmlComponentTagName($componentName)) {
+            return $componentName;
+        }
+
+        $segments = preg_split('/[-.]+/', substr($componentName, 2));
+
+        if ($segments === false) {
+            return $componentName;
+        }
+
+        $segments = array_values(array_filter($segments, static fn(string $segment): bool => $segment !== ''));
+
+        if ($segments === []) {
+            return $componentName;
+        }
+
+        return implode('', array_map(static fn(string $segment): string => ucfirst($segment), $segments));
+    }
+
+    private static function isHtmlComponentTagName(string $tagName): bool
+    {
+        return preg_match('/\Ax-[a-z0-9][a-z0-9.-]*\z/i', $tagName) === 1;
+    }
+
+    public static function innerHtml(DOMNode $node): string
     {
         if ($node instanceof DOMDocument) {
             $node = $node->documentElement;
@@ -1870,13 +1705,20 @@ class TemplateCompiler
         }
 
         $document = $node instanceof DOMDocument ? $node : $node->ownerDocument;
-        $xml = '';
+        $html = '';
 
         foreach ($node->childNodes as $child) {
-            $xml .= $document->saveXML($child);
+            $html .= $document->saveHTML($child);
         }
 
-        return $xml;
+        return $html;
+    }
+
+    public static function outerHtml(DOMNode $node): string
+    {
+        $document = $node instanceof DOMDocument ? $node : $node->ownerDocument;
+
+        return $document ? $document->saveHTML($node) : '';
     }
 
     private static function tryScopeRouteRootWithoutDom(string $htmlContent, string $componentId): ?string
@@ -1938,7 +1780,7 @@ class TemplateCompiler
         }
 
         $openingTag = substr($trimmedHtml, 0, $openingTagEnd + 1);
-        if (preg_match('/\A<([A-Za-z][\w:-]*)\b[\s\S]*>\z/s', $openingTag, $matches) !== 1) {
+        if (preg_match('/\A<([A-Za-z][\w:.-]*)\b[\s\S]*>\z/s', $openingTag, $matches) !== 1) {
             return null;
         }
 
@@ -2018,7 +1860,7 @@ class TemplateCompiler
 
             $tagMarkup = substr($trimmedHtml, $nextTagPos, $tagEnd - $nextTagPos + 1);
 
-            if (preg_match('/\A<\/([A-Za-z][\w:-]*)\b[^>]*>\z/s', $tagMarkup, $tagMatch) === 1) {
+            if (preg_match('/\A<\/([A-Za-z][\w:.-]*)\b[^>]*>\z/s', $tagMarkup, $tagMatch) === 1) {
                 if (strtolower($tagMatch[1]) === $tagName) {
                     $depth--;
                 }
@@ -2027,7 +1869,7 @@ class TemplateCompiler
                 continue;
             }
 
-            if (preg_match('/\A<([A-Za-z][\w:-]*)\b[\s\S]*>\z/s', $tagMarkup, $tagMatch) !== 1) {
+            if (preg_match('/\A<([A-Za-z][\w:.-]*)\b[\s\S]*>\z/s', $tagMarkup, $tagMatch) !== 1) {
                 return null;
             }
 
@@ -2081,7 +1923,8 @@ class TemplateCompiler
             return false;
         }
 
-        return preg_match('/^[A-Z]/', $analysis['originalTagName']) === 1;
+        return preg_match('/^[A-Z]/', $analysis['originalTagName']) === 1
+            || self::isHtmlComponentTagName($analysis['originalTagName']);
     }
 
     private static function extractOwnedPassthroughChildRoot(string $htmlContent): ?string
@@ -2201,7 +2044,7 @@ class TemplateCompiler
         string $contextLabel
     ): DOMDocument {
         try {
-            return self::convertToXml($htmlContent);
+            return self::createHtmlFragmentDom($htmlContent);
         } catch (RuntimeException $exception) {
             throw new RuntimeException(
                 sprintf(
@@ -2226,7 +2069,7 @@ class TemplateCompiler
         if (!$wrapper) {
             throw new RuntimeException(
                 sprintf(
-                    '%s missing XML wrapper during single-root validation. File: %s',
+                    '%s missing HTML fragment wrapper during single-root validation. File: %s',
                     $contextLabel,
                     $filePath
                 )
@@ -2403,10 +2246,10 @@ class TemplateCompiler
 
     protected static function initializeClassMappings(): void
     {
-        self::$classMappings = PrismaPHPSettings::$classLogFiles;
+        self::$classMappings = PrismaPHPSettings::getClassLogFiles();
     }
 
-    protected static function getXmlErrors(): array
+    protected static function getMarkupErrors(): array
     {
         $errors = libxml_get_errors();
         libxml_clear_errors();

@@ -6,6 +6,8 @@ namespace PP\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use PP\PHPX\PHPX;
+use PP\PrismaPHPSettings;
+use PP\PrismaSettings;
 
 final class PHPXTest extends TestCase
 {
@@ -13,6 +15,8 @@ final class PHPXTest extends TestCase
     {
         $this->setStaticProperty(PHPX::class, 'publicPropertyTypeCache', []);
         $this->setStaticProperty(PHPX::class, 'publicPropertyTypeInfoCache', []);
+        $this->setStaticProperty(PHPX::class, 'publicPropertyLookupCache', []);
+        $this->setStaticProperty(PHPX::class, 'mergedClassCache', []);
     }
 
     public function testConstructorCoercesPublicPropsAndReusesCachedMetadata(): void
@@ -32,6 +36,43 @@ final class PHPXTest extends TestCase
         self::assertCount(1, $propertyCache);
         self::assertArrayHasKey(PHPXFixture::class, $propertyCache);
         self::assertSame(['count', 'label'], array_keys($propertyCache[PHPXFixture::class]));
+    }
+
+    public function testGetMergeClassesCachesRepeatedResults(): void
+    {
+        PrismaPHPSettings::$option = new PrismaSettings([
+            'tailwindcss' => true,
+        ]);
+
+        $component = new PHPXMergeFixture();
+        $first = $component->mergeClassesForTest('px-2 py-1 rounded', 'px-4 rounded bg-blue-500');
+        $second = $component->mergeClassesForTest('px-2 py-1 rounded', 'px-4 rounded bg-blue-500');
+
+        $cache = $this->getStaticProperty(PHPX::class, 'mergedClassCache');
+
+        self::assertSame($first, $second);
+        self::assertCount(1, $cache);
+    }
+
+    public function testConstructorTreatsValuelessBooleanAliasesAsPresentWithoutPassingThemThrough(): void
+    {
+        $component = new PHPXBooleanAliasFixture([
+            'as-child' => '',
+            'data-slot' => 'button',
+        ]);
+
+        $attributes = $component->attributesForTest();
+        $serializableProps = $component->filterIncomingPropsForRootSerialization([
+            'as-child' => '',
+            'data-slot' => 'button',
+        ]);
+
+        self::assertTrue($component->asChild);
+        self::assertStringContainsString("data-slot='button'", $attributes);
+        self::assertStringNotContainsString('asChild', $attributes);
+        self::assertStringNotContainsString('as-child', $attributes);
+        self::assertStringNotContainsString('aschild', $attributes);
+        self::assertSame(['data-slot' => 'button'], $serializableProps);
     }
 
     private function getStaticProperty(string $className, string $propertyName): mixed
@@ -54,4 +95,22 @@ final class PHPXFixture extends PHPX
 {
     public int $count = 0;
     public ?string $label = null;
+}
+
+final class PHPXMergeFixture extends PHPX
+{
+    public function mergeClassesForTest(string|array ...$classes): string
+    {
+        return $this->getMergeClasses(...$classes);
+    }
+}
+
+final class PHPXBooleanAliasFixture extends PHPX
+{
+    public ?bool $asChild = false;
+
+    public function attributesForTest(): string
+    {
+        return $this->getAttributes();
+    }
 }
