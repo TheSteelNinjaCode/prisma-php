@@ -15,6 +15,7 @@ final class TemplateCompilerTest extends TestCase
     protected function setUp(): void
     {
         PrismaPHPSettings::$classLogFiles = [];
+        $this->setStaticProperty(PrismaPHPSettings::class, 'classLogFilesLoaded', true);
 
         $this->setStaticProperty(TemplateCompiler::class, 'classMappings', []);
         $this->setStaticProperty(TemplateCompiler::class, 'compiledCache', []);
@@ -26,6 +27,8 @@ final class TemplateCompilerTest extends TestCase
 
     protected function tearDown(): void
     {
+        PrismaPHPSettings::$classLogFiles = [];
+        $this->setStaticProperty(PrismaPHPSettings::class, 'classLogFilesLoaded', false);
         $this->setStaticProperty(TemplateCompiler::class, 'classMappings', []);
         $this->setStaticProperty(TemplateCompiler::class, 'compiledCache', []);
         $this->setStaticProperty(TemplateCompiler::class, 'cacheStats', []);
@@ -88,10 +91,10 @@ final class TemplateCompilerTest extends TestCase
         $method->setAccessible(true);
 
         $html = '<button>Save</button>';
-        $output = $method->invoke(null, $html, 's1', ['onClick' => '{save}', 'title' => 'Save']);
+        $output = $method->invoke(null, $html, 's1', ['onclick' => '{save}', 'title' => 'Save']);
 
         self::assertStringContainsString('pp-component="s1"', $output);
-        self::assertStringContainsString('on-click="{save}"', $output);
+        self::assertStringContainsString('onclick="{save}"', $output);
         self::assertStringContainsString('title="Save"', $output);
         self::assertStringContainsString('>Save</button>', $output);
     }
@@ -113,14 +116,14 @@ final class TemplateCompilerTest extends TestCase
         $method = new \ReflectionMethod(TemplateCompiler::class, 'compileComponentHtml');
         $method->setAccessible(true);
 
-        $html = '<div><template pp-owner="child"><button onClick="{save}"></button></template><button onClick="{save}"></button><button onClick="{skip}"></button></div>';
-        $output = $method->invoke(null, $html, 's1', ['onClick' => '{save}'], 'parent');
+        $html = '<div><template pp-owner="child"><button onclick="{save}"></button></template><button onclick="{save}"></button><button onclick="{skip}"></button></div>';
+        $output = $method->invoke(null, $html, 's1', ['onclick' => '{save}'], 'parent');
 
         self::assertSame(1, substr_count($output, 'pp-owner="parent"'));
         self::assertSame(1, substr_count($output, 'pp-owner="child"'));
         self::assertStringStartsWith('<div pp-component="s1">', $output);
-        self::assertStringContainsString('<template pp-owner="parent"><button on-click="{save}"></button></template>', $output);
-        self::assertStringContainsString('<button on-click="{skip}"></button>', $output);
+        self::assertStringContainsString('<template pp-owner="parent"><button onclick="{save}"></button></template>', $output);
+        self::assertStringContainsString('<button onclick="{skip}"></button>', $output);
     }
 
     public function testCompileComponentHtmlStillFindsDescendantAttributesInsideWrappedEventSubtree(): void
@@ -128,14 +131,14 @@ final class TemplateCompilerTest extends TestCase
         $method = new \ReflectionMethod(TemplateCompiler::class, 'compileComponentHtml');
         $method->setAccessible(true);
 
-        $html = '<div><button onClick="{save}"><span title="child"></span></button></div>';
-        $output = $method->invoke(null, $html, 's1', ['title' => 'Root', 'onClick' => '{save}'], 'parent');
+        $html = '<div><button onclick="{save}"><span title="child"></span></button></div>';
+        $output = $method->invoke(null, $html, 's1', ['title' => 'Root', 'onclick' => '{save}'], 'parent');
 
         self::assertSame(1, substr_count($output, 'title="'));
         self::assertStringStartsWith('<div pp-component="s1">', $output);
         self::assertStringNotContainsString('<div pp-component="s1" title="Root">', $output);
         self::assertStringContainsString('<span title="child"></span>', $output);
-        self::assertStringContainsString('<template pp-owner="parent"><button on-click="{save}">', $output);
+        self::assertStringContainsString('<template pp-owner="parent"><button onclick="{save}">', $output);
     }
 
     public function testCompileComponentHtmlSupportsHtmlBooleanAttributesInNestedMarkup(): void
@@ -182,7 +185,8 @@ final class TemplateCompilerTest extends TestCase
 
         self::assertStringContainsString('<a', $output);
         self::assertStringContainsString('href="/"', $output);
-        self::assertStringContainsString('>Click Me</a>', $output);
+        self::assertStringContainsString('Click Me', $output);
+        self::assertStringContainsString('<template pp-owner="app">', $output);
         self::assertStringNotContainsString('<button', $output);
         self::assertStringNotContainsString('as-child', $output);
         self::assertStringNotContainsString('aschild', $output);

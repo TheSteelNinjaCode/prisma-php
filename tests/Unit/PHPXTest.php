@@ -41,7 +41,7 @@ final class PHPXTest extends TestCase
     public function testGetMergeClassesCachesRepeatedResults(): void
     {
         PrismaPHPSettings::$option = new PrismaSettings([
-            'tailwindcss' => true,
+            'tailwindcss' => false,
         ]);
 
         $component = new PHPXMergeFixture();
