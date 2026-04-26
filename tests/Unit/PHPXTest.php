@@ -75,6 +75,33 @@ final class PHPXTest extends TestCase
         self::assertSame(['data-slot' => 'button'], $serializableProps);
     }
 
+    public function testConstructorMapsCustomKebabCasePropsIntoCamelCaseClassProperties(): void
+    {
+        $component = new PHPXCustomAliasFixture([
+            'as-child' => '',
+            'data-state' => 'open',
+            'on-change-checked' => '{toggleHome}',
+            'aria-label' => 'Home',
+        ]);
+
+        $attributes = $component->attributesForTest();
+        $serializableProps = $component->filterIncomingPropsForRootSerialization([
+            'as-child' => '',
+            'data-state' => 'open',
+            'on-change-checked' => '{toggleHome}',
+            'aria-label' => 'Home',
+        ]);
+
+        self::assertTrue($component->asChild);
+        self::assertSame('open', $component->dataState);
+        self::assertSame('{toggleHome}', $component->onChangeChecked);
+        self::assertStringContainsString("aria-label='Home'", $attributes);
+        self::assertStringNotContainsString('as-child', $attributes);
+        self::assertStringNotContainsString('data-state', $attributes);
+        self::assertStringNotContainsString('on-change-checked', $attributes);
+        self::assertSame(['aria-label' => 'Home'], $serializableProps);
+    }
+
     private function getStaticProperty(string $className, string $propertyName): mixed
     {
         $reflection = new \ReflectionClass($className);
@@ -108,6 +135,18 @@ final class PHPXMergeFixture extends PHPX
 final class PHPXBooleanAliasFixture extends PHPX
 {
     public ?bool $asChild = false;
+
+    public function attributesForTest(): string
+    {
+        return $this->getAttributes();
+    }
+}
+
+final class PHPXCustomAliasFixture extends PHPX
+{
+    public ?bool $asChild = false;
+    public ?string $dataState = null;
+    public ?string $onChangeChecked = null;
 
     public function attributesForTest(): string
     {

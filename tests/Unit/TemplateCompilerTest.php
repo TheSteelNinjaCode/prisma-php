@@ -192,6 +192,30 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringNotContainsString('aschild', $output);
     }
 
+    public function testCompileMapsCustomKebabCasePropsIntoHtmlFirstComponentClassProperties(): void
+    {
+        PrismaPHPSettings::$classLogFiles = [
+            'x-button' => [[
+                'className' => HtmlFirstCustomAliasFixture::class,
+                'filePath' => __FILE__,
+            ]],
+        ];
+        $this->setStaticProperty(TemplateCompiler::class, 'classMappings', []);
+
+        $output = TemplateCompiler::compile(
+            '<div><x-button as-child data-state="open" on-change-checked="{toggleHome}"><a href="/">Home</a></x-button></div>'
+        );
+
+        self::assertStringContainsString('<section', $output);
+        self::assertStringContainsString('data-state="open"', $output);
+        self::assertStringContainsString('data-on-change-checked="{toggleHome}"', $output);
+        self::assertStringContainsString('<a href="/">Home</a>', $output);
+        self::assertSame(1, substr_count($output, 'data-state="open"'));
+        self::assertSame(1, substr_count($output, 'data-on-change-checked="{toggleHome}"'));
+        self::assertStringNotContainsString('as-child', $output);
+        self::assertStringNotContainsString(' on-change-checked="{toggleHome}"', $output);
+    }
+
     public function testCompileRejectsUnknownHtmlFirstComponentTags(): void
     {
         PrismaPHPSettings::$classLogFiles = [];
@@ -301,6 +325,29 @@ final class HtmlFirstAsChildButtonFixture extends \PP\PHPX\PHPX
     {
         if ($this->asChild) {
             return '<a href="/">' . ($this->children ?? '') . '</a>';
+        }
+
+        return '<button>' . ($this->children ?? '') . '</button>';
+    }
+}
+
+final class HtmlFirstCustomAliasFixture extends \PP\PHPX\PHPX
+{
+    public ?bool $asChild = false;
+    public ?string $dataState = null;
+    public ?string $onChangeChecked = null;
+    public mixed $children = null;
+
+    public function render(): string
+    {
+        if ($this->asChild) {
+            return '<section data-state="'
+                . htmlspecialchars((string) $this->dataState, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . '" data-on-change-checked="'
+                . htmlspecialchars((string) $this->onChangeChecked, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . '">'
+                . ($this->children ?? '')
+                . '</section>';
         }
 
         return '<button>' . ($this->children ?? '') . '</button>';
