@@ -1784,11 +1784,8 @@ class TemplateCompiler
      */
     private static function analyzeSingleRootHtml(string $htmlContent): ?array
     {
-        if (preg_match('/\A(\s*)(.*?)(\s*)\z/s', $htmlContent, $outerMatches) !== 1) {
-            return null;
-        }
+        [$leadingWhitespace, $trimmedHtml, $trailingWhitespace] = self::splitOuterWhitespace($htmlContent);
 
-        $trimmedHtml = $outerMatches[2];
         if ($trimmedHtml === '' || !str_starts_with($trimmedHtml, '<')) {
             return null;
         }
@@ -1821,9 +1818,9 @@ class TemplateCompiler
             }
 
             return [
-                'leadingWhitespace' => $outerMatches[1],
+                'leadingWhitespace' => $leadingWhitespace,
                 'trimmedHtml' => $trimmedHtml,
-                'trailingWhitespace' => $outerMatches[3],
+                'trailingWhitespace' => $trailingWhitespace,
                 'openingTag' => $openingTag,
                 'originalTagName' => $originalTagName,
                 'tagName' => $tagName,
@@ -1926,9 +1923,9 @@ class TemplateCompiler
         }
 
         return [
-            'leadingWhitespace' => $outerMatches[1],
+            'leadingWhitespace' => $leadingWhitespace,
             'trimmedHtml' => $trimmedHtml,
-            'trailingWhitespace' => $outerMatches[3],
+            'trailingWhitespace' => $trailingWhitespace,
             'openingTag' => $openingTag,
             'originalTagName' => $originalTagName,
             'tagName' => $tagName,
@@ -1987,6 +1984,50 @@ class TemplateCompiler
         }
 
         return $childAnalysis['trimmedHtml'];
+    }
+
+    /**
+     * @return array{0:string,1:string,2:string}
+     */
+    public static function splitOuterWhitespace(string $html): array
+    {
+        $length = strlen($html);
+
+        if ($length === 0) {
+            return ['', '', ''];
+        }
+
+        $start = 0;
+
+        while ($start < $length && self::isAsciiWhitespace($html[$start])) {
+            $start++;
+        }
+
+        if ($start === $length) {
+            return [$html, '', ''];
+        }
+
+        $end = $length - 1;
+
+        while ($end >= $start && self::isAsciiWhitespace($html[$end])) {
+            $end--;
+        }
+
+        return [
+            $start > 0 ? substr($html, 0, $start) : '',
+            substr($html, $start, $end - $start + 1),
+            $end < $length - 1 ? substr($html, $end + 1) : '',
+        ];
+    }
+
+    private static function isAsciiWhitespace(string $char): bool
+    {
+        return $char === ' '
+            || $char === "\n"
+            || $char === "\r"
+            || $char === "\t"
+            || $char === "\0"
+            || $char === "\x0B";
     }
 
     private static function findHtmlTagEnd(string $html, int $start): ?int

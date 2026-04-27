@@ -901,13 +901,7 @@ final class ImportComponent
         string $html,
         array $attributes
     ): ?string {
-        if (preg_match('/\A(\s*)(.*?)(\s*)\z/s', $html, $outerMatches) !== 1) {
-            return null;
-        }
-
-        $leadingWhitespace = $outerMatches[1];
-        $trimmedHtml = $outerMatches[2];
-        $trailingWhitespace = $outerMatches[3];
+        [$leadingWhitespace, $trimmedHtml, $trailingWhitespace] = TemplateCompiler::splitOuterWhitespace($html);
 
         if ($trimmedHtml === '' || !str_starts_with($trimmedHtml, '<')) {
             return null;
