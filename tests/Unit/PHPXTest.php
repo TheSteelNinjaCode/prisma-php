@@ -99,7 +99,10 @@ final class PHPXTest extends TestCase
         self::assertStringNotContainsString('as-child', $attributes);
         self::assertStringNotContainsString('data-state', $attributes);
         self::assertStringNotContainsString('on-change-checked', $attributes);
-        self::assertSame(['aria-label' => 'Home'], $serializableProps);
+        self::assertSame([
+            'on-change-checked' => '{toggleHome}',
+            'aria-label' => 'Home',
+        ], $serializableProps);
     }
 
     private function getStaticProperty(string $className, string $propertyName): mixed
