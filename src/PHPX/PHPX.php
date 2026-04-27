@@ -91,7 +91,9 @@ class PHPX implements IPHPX
 
             if ($originalKey !== $normalizedKey) {
                 $this->attributePropExclusions[$normalizedKey] = true;
-                $this->incomingPropSerializationExclusions[$originalKey] = true;
+                if (!self::shouldPreserveOriginalPropForRootSerialization($originalKey, $normalizedKey)) {
+                    $this->incomingPropSerializationExclusions[$originalKey] = true;
+                }
             }
 
             $valueForCoercion = self::normalizeValuelessBooleanProp($value, $propertyTypeInfos[$normalizedKey] ?? null);
@@ -210,6 +212,15 @@ class PHPX implements IPHPX
         }
 
         return $value;
+    }
+
+    private static function shouldPreserveOriginalPropForRootSerialization(
+        string $originalKey,
+        string $normalizedKey
+    ): bool {
+        return str_contains($originalKey, '-')
+            && str_starts_with(strtolower($originalKey), 'on-')
+            && str_starts_with(strtolower($normalizedKey), 'on');
     }
 
     /**
