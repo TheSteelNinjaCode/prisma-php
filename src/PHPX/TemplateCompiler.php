@@ -76,6 +76,7 @@ class TemplateCompiler
     private static array $componentFileStack = [];
     private static array $camelToKebabCache = [];
     private static array $componentPropMetadataCache = [];
+    private static array $componentImportCache = [];
 
     public static function compile(string $templateContent): string
     {
@@ -457,7 +458,8 @@ class TemplateCompiler
                 return self::renderComponent(
                     $node,
                     $componentLookupKey,
-                    self::getNodeAttributes($node)
+                    self::getNodeAttributes($node),
+                    $node->nodeName
                 );
             }
 
@@ -559,9 +561,10 @@ class TemplateCompiler
     protected static function renderComponent(
         DOMElement $node,
         string $componentName,
-        array $incomingProps
+        array $incomingProps,
+        ?string $requestedComponentName = null
     ): string {
-        $mapping = self::selectComponentMapping($componentName);
+        $mapping = self::selectComponentMapping($requestedComponentName ?? $componentName, $componentName);
 
         self::ensureClassLoaded($mapping['className'], $mapping['filePath']);
         self::validateComponentChildren($mapping['className'], $node);
@@ -1551,9 +1554,10 @@ class TemplateCompiler
         }
     }
 
-    private static function selectComponentMapping(string $componentName): array
+    private static function selectComponentMapping(string $componentName, ?string $resolvedComponentName = null): array
     {
-        $componentName = self::resolveRegisteredComponentKey($componentName) ?? $componentName;
+        $aliasedClassName = self::resolveAliasedComponentClassName($componentName);
+        $componentName = $resolvedComponentName ?? (self::resolveRegisteredComponentKey($componentName) ?? $componentName);
 
         if (!isset(self::$classMappings[$componentName])) {
             throw new RuntimeException("Component {$componentName} not registered");
@@ -1565,7 +1569,20 @@ class TemplateCompiler
             return $mappings;
         }
 
+        if ($aliasedClassName !== null) {
+            $normalizedAliasedClassName = strtolower(ltrim($aliasedClassName, '\\'));
+
+            foreach ($mappings as $entry) {
+                $entryClassName = strtolower(ltrim((string) ($entry['className'] ?? ''), '\\'));
+
+                if ($entryClassName === $normalizedAliasedClassName) {
+                    return $entry;
+                }
+            }
+        }
+
         $currentFile = self::normalizePathForComparison(Bootstrap::$contentToInclude);
+        $lookupFiles = self::getComponentLookupFiles();
 
         if (!empty(self::$componentFileStack)) {
             foreach ($mappings as $entry) {
@@ -1596,6 +1613,14 @@ class TemplateCompiler
             }
         }
 
+        foreach ($lookupFiles as $lookupFile) {
+            $resolvedByImport = self::selectImportedComponentMapping($mappings, $lookupFile);
+
+            if ($resolvedByImport !== null) {
+                return $resolvedByImport;
+            }
+        }
+
         foreach ($mappings as $entry) {
             if (isset($entry['importer'])) {
                 $importerPath = self::normalizePathForComparison($entry['importer']);
@@ -1617,13 +1642,461 @@ class TemplateCompiler
             }
         }
 
+        $matchingClassNameMappings = [];
+
         foreach ($mappings as $entry) {
             if (self::componentNameMatchesClassName($componentName, $entry['className'])) {
-                return $entry;
+                $matchingClassNameMappings[] = $entry;
             }
         }
 
+        if (count($matchingClassNameMappings) === 1) {
+            return $matchingClassNameMappings[0];
+        }
+
+        if (count($mappings) > 1) {
+            $lookupTarget = Bootstrap::$contentToInclude !== ''
+                ? Bootstrap::$contentToInclude
+                : ($lookupFiles[0] ?? 'the current template');
+            $componentOptions = implode(', ', array_map(
+                static fn(array $entry): string => (string) ($entry['className'] ?? ''),
+                $mappings
+            ));
+
+            throw new RuntimeException(
+                "Component {$componentName} is ambiguous for {$lookupTarget}. Add a use import for one of: {$componentOptions}."
+            );
+        }
+
         return $mappings[0];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function getComponentLookupFiles(): array
+    {
+        $files = [];
+
+        for ($index = count(self::$componentFileStack) - 1; $index >= 0; $index--) {
+            $stackFile = self::$componentFileStack[$index] ?? '';
+
+            if (is_string($stackFile) && $stackFile !== '' && !in_array($stackFile, $files, true)) {
+                $files[] = $stackFile;
+            }
+        }
+
+        if (Bootstrap::$contentToInclude !== '' && !in_array(Bootstrap::$contentToInclude, $files, true)) {
+            $files[] = Bootstrap::$contentToInclude;
+        }
+
+        return $files;
+    }
+
+    private static function selectImportedComponentMapping(array $mappings, string $filePath): ?array
+    {
+        $imports = self::getImportedClassMapForFile($filePath);
+
+        if ($imports === []) {
+            return null;
+        }
+
+        $matches = [];
+
+        foreach ($mappings as $entry) {
+            $className = strtolower(ltrim((string) ($entry['className'] ?? ''), '\\'));
+
+            if ($className !== '' && isset($imports[$className])) {
+                $matches[] = $entry;
+            }
+        }
+
+        if (count($matches) === 1) {
+            return $matches[0];
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array<string, true>
+     */
+    private static function getImportedClassMapForFile(string $filePath): array
+    {
+        $realPath = realpath($filePath);
+
+        if ($realPath === false || !is_file($realPath)) {
+            return [];
+        }
+
+        $mtime = filemtime($realPath);
+        $cacheKey = $realPath . '|' . ($mtime === false ? 'na' : (string) $mtime);
+
+        if (isset(self::$componentImportCache[$cacheKey])) {
+            return self::$componentImportCache[$cacheKey];
+        }
+
+        $source = file_get_contents($realPath);
+
+        if ($source === false) {
+            self::$componentImportCache[$cacheKey] = [];
+
+            return self::$componentImportCache[$cacheKey];
+        }
+
+        $imports = [];
+
+        foreach (self::parseImportedClassNames($source) as $importedClass) {
+            $normalizedImport = strtolower(ltrim($importedClass, '\\'));
+
+            if ($normalizedImport !== '') {
+                $imports[$normalizedImport] = true;
+            }
+        }
+
+        self::$componentImportCache[$cacheKey] = $imports;
+
+        return self::$componentImportCache[$cacheKey];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private static function getImportedAliasClassMapForFile(string $filePath): array
+    {
+        $realPath = realpath($filePath);
+
+        if ($realPath === false || !is_file($realPath)) {
+            return [];
+        }
+
+        $source = file_get_contents($realPath);
+
+        if ($source === false) {
+            return [];
+        }
+
+        return self::parseImportedAliasClassMap($source);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private static function parseImportedAliasClassMap(string $source): array
+    {
+        $tokens = token_get_all($source);
+        $tokenCount = count($tokens);
+        $depth = 0;
+        $aliases = [];
+
+        for ($index = 0; $index < $tokenCount; $index++) {
+            $token = $tokens[$index];
+
+            if (is_string($token)) {
+                if ($token === '{') {
+                    $depth++;
+                } elseif ($token === '}') {
+                    $depth = max(0, $depth - 1);
+                }
+
+                continue;
+            }
+
+            if ($depth !== 0 || $token[0] !== T_USE) {
+                continue;
+            }
+
+            foreach (self::parseImportedAliasClassMapFromTokens($tokens, $index) as $alias => $className) {
+                $aliases[$alias] = $className;
+            }
+        }
+
+        return $aliases;
+    }
+
+    /**
+     * @param list<mixed> $tokens
+     * @return array<string, string>
+     */
+    private static function parseImportedAliasClassMapFromTokens(array $tokens, int &$index): array
+    {
+        $aliases = [];
+        $tokenCount = count($tokens);
+        $currentName = '';
+        $currentAlias = null;
+        $groupPrefix = '';
+        $readingAlias = false;
+
+        $nextToken = self::nextMeaningfulToken($tokens, $index + 1);
+
+        if (is_array($nextToken) && in_array($nextToken[0], [T_FUNCTION, T_CONST], true)) {
+            for ($cursor = $index + 1; $cursor < $tokenCount; $cursor++) {
+                if ($tokens[$cursor] === ';') {
+                    $index = $cursor;
+                    break;
+                }
+            }
+
+            return [];
+        }
+
+        for ($cursor = $index + 1; $cursor < $tokenCount; $cursor++) {
+            $token = $tokens[$cursor];
+
+            if (is_string($token)) {
+                if ($token === '{') {
+                    $groupPrefix = trim($currentName, '\\');
+                    $currentName = '';
+                    $currentAlias = null;
+                    $readingAlias = false;
+                    continue;
+                }
+
+                if ($token === ',' || $token === '}' || $token === ';') {
+                    if ($currentName !== '' && $currentAlias !== null && $currentAlias !== '') {
+                        $aliases[strtolower($currentAlias)] = self::normalizeImportedClassName(
+                            $groupPrefix,
+                            $currentName,
+                            $currentAlias
+                        );
+                    }
+
+                    $currentName = '';
+                    $currentAlias = null;
+                    $readingAlias = false;
+
+                    if ($token === '}') {
+                        $groupPrefix = '';
+                        continue;
+                    }
+
+                    if ($token === ';') {
+                        $index = $cursor;
+                        break;
+                    }
+
+                    continue;
+                }
+
+                continue;
+            }
+
+            if (in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+
+            if ($token[0] === T_AS) {
+                $aliasToken = self::nextMeaningfulToken($tokens, $cursor + 1);
+                $currentAlias = is_array($aliasToken) ? $aliasToken[1] : null;
+                $readingAlias = true;
+                continue;
+            }
+
+            if (self::isQualifiedNameToken($token[0])) {
+                if ($readingAlias) {
+                    continue;
+                }
+
+                $currentName .= $token[1];
+            }
+        }
+
+        return $aliases;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function parseImportedClassNames(string $source): array
+    {
+        $tokens = token_get_all($source);
+        $tokenCount = count($tokens);
+        $depth = 0;
+        $imports = [];
+
+        for ($index = 0; $index < $tokenCount; $index++) {
+            $token = $tokens[$index];
+
+            if (is_string($token)) {
+                if ($token === '{') {
+                    $depth++;
+                } elseif ($token === '}') {
+                    $depth = max(0, $depth - 1);
+                }
+
+                continue;
+            }
+
+            if ($depth !== 0 || $token[0] !== T_USE) {
+                continue;
+            }
+
+            foreach (self::parseImportedClassNamesFromTokens($tokens, $index) as $importedClass) {
+                $imports[] = $importedClass;
+            }
+        }
+
+        return array_values(array_unique($imports));
+    }
+
+    /**
+     * @param list<mixed> $tokens
+     * @return list<string>
+     */
+    private static function parseImportedClassNamesFromTokens(array $tokens, int &$index): array
+    {
+        $imports = [];
+        $tokenCount = count($tokens);
+        $currentName = '';
+        $currentAlias = null;
+        $groupPrefix = '';
+        $readingAlias = false;
+
+        $nextToken = self::nextMeaningfulToken($tokens, $index + 1);
+
+        if (is_array($nextToken) && in_array($nextToken[0], [T_FUNCTION, T_CONST], true)) {
+            for ($cursor = $index + 1; $cursor < $tokenCount; $cursor++) {
+                if ($tokens[$cursor] === ';') {
+                    $index = $cursor;
+                    break;
+                }
+            }
+
+            return [];
+        }
+
+        for ($cursor = $index + 1; $cursor < $tokenCount; $cursor++) {
+            $token = $tokens[$cursor];
+
+            if (is_string($token)) {
+                if ($token === '{') {
+                    $groupPrefix = trim($currentName, '\\');
+                    $currentName = '';
+                    $currentAlias = null;
+                    $readingAlias = false;
+                    continue;
+                }
+
+                if ($token === ',' || $token === '}' || $token === ';') {
+                    if ($currentName !== '') {
+                        $resolvedName = self::normalizeImportedClassName(
+                            $groupPrefix,
+                            $currentName,
+                            $currentAlias
+                        );
+
+                        if (self::shouldTreatImportAsCanonicalReference($resolvedName, $currentAlias)) {
+                            $imports[] = $resolvedName;
+                        }
+                    }
+
+                    $currentName = '';
+                    $currentAlias = null;
+                    $readingAlias = false;
+
+                    if ($token === '}') {
+                        $groupPrefix = '';
+                        continue;
+                    }
+
+                    if ($token === ';') {
+                        $index = $cursor;
+                        break;
+                    }
+
+                    continue;
+                }
+
+                continue;
+            }
+
+            if (in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+
+            if ($token[0] === T_AS) {
+                $aliasToken = self::nextMeaningfulToken($tokens, $cursor + 1);
+                $currentAlias = is_array($aliasToken) ? $aliasToken[1] : null;
+                $readingAlias = true;
+                continue;
+            }
+
+            if (self::isQualifiedNameToken($token[0])) {
+                if ($readingAlias) {
+                    continue;
+                }
+
+                $currentName .= $token[1];
+            }
+        }
+
+        return array_values(array_filter($imports, static fn(string $import): bool => $import !== ''));
+    }
+
+    private static function shouldTreatImportAsCanonicalReference(string $resolvedName, ?string $alias): bool
+    {
+        if ($alias === null || $alias === '') {
+            return true;
+        }
+
+        $parts = explode('\\', ltrim($resolvedName, '\\'));
+        $shortName = end($parts);
+
+        if (!is_string($shortName) || $shortName === '') {
+            return false;
+        }
+
+        return strcasecmp($shortName, $alias) === 0;
+    }
+
+    private static function normalizeImportedClassName(
+        string $groupPrefix,
+        string $currentName,
+        ?string $currentAlias
+    ): string {
+        $resolvedName = $groupPrefix !== ''
+            ? $groupPrefix . '\\' . ltrim($currentName, '\\')
+            : ltrim($currentName, '\\');
+
+        if ($currentAlias === null || $currentAlias === '') {
+            return $resolvedName;
+        }
+
+        return $resolvedName;
+    }
+
+    /**
+     * @param list<mixed> $tokens
+     */
+    private static function nextMeaningfulToken(array $tokens, int $start): mixed
+    {
+        $tokenCount = count($tokens);
+
+        for ($cursor = $start; $cursor < $tokenCount; $cursor++) {
+            $token = $tokens[$cursor];
+
+            if (is_array($token) && in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+
+            return $token;
+        }
+
+        return null;
+    }
+
+    private static function isQualifiedNameToken(int $tokenId): bool
+    {
+        return in_array(
+            $tokenId,
+            array_filter([
+                T_STRING,
+                defined('T_NAME_QUALIFIED') ? T_NAME_QUALIFIED : null,
+                defined('T_NAME_FULLY_QUALIFIED') ? T_NAME_FULLY_QUALIFIED : null,
+                defined('T_NAME_RELATIVE') ? T_NAME_RELATIVE : null,
+            ]),
+            true
+        );
     }
 
     private static function normalizePathForComparison(string $path): string
@@ -1686,6 +2159,66 @@ class TemplateCompiler
 
         if (isset(self::$classMappings[$componentName])) {
             return $componentName;
+        }
+
+        return self::resolveAliasedComponentKey($componentName);
+    }
+
+    private static function resolveAliasedComponentKey(string $componentName): ?string
+    {
+        $className = self::resolveAliasedComponentClassName($componentName);
+
+        if ($className === null) {
+            return null;
+        }
+
+        return self::findRegisteredComponentKeyByClassName($className);
+    }
+
+    private static function resolveAliasedComponentClassName(string $componentName): ?string
+    {
+        $normalizedAlias = strtolower(self::normalizeHtmlComponentName($componentName));
+
+        if ($normalizedAlias === '') {
+            return null;
+        }
+
+        foreach (self::getComponentLookupFiles() as $lookupFile) {
+            $aliasMap = self::getImportedAliasClassMapForFile($lookupFile);
+            $className = $aliasMap[$normalizedAlias] ?? null;
+
+            if ($className !== null) {
+                return $className;
+            }
+        }
+
+        return null;
+    }
+
+    private static function findRegisteredComponentKeyByClassName(string $className): ?string
+    {
+        $normalizedClassName = strtolower(ltrim($className, '\\'));
+        $matchingKeys = [];
+
+        foreach (self::$classMappings as $key => $mappings) {
+            if (!isset($mappings[0]) || !is_array($mappings[0])) {
+                $mappings = [$mappings];
+            }
+
+            foreach ($mappings as $entry) {
+                $entryClassName = strtolower(ltrim((string) ($entry['className'] ?? ''), '\\'));
+
+                if ($entryClassName === $normalizedClassName) {
+                    $matchingKeys[$key] = true;
+                    break;
+                }
+            }
+        }
+
+        $keys = array_keys($matchingKeys);
+
+        if (count($keys) === 1) {
+            return $keys[0];
         }
 
         return null;

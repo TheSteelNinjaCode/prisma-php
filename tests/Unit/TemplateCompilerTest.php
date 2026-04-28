@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace PP\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 use PP\MainLayout;
 use PP\PHPX\TemplateCompiler;
 use PP\PrismaPHPSettings;
@@ -23,6 +24,8 @@ final class TemplateCompilerTest extends TestCase
         $this->setStaticProperty(TemplateCompiler::class, 'cacheEnabled', true);
         $this->setStaticProperty(TemplateCompiler::class, 'maxCacheSize', 2);
         $this->setStaticProperty(TemplateCompiler::class, 'componentPropMetadataCache', []);
+        $this->setStaticProperty(TemplateCompiler::class, 'componentImportCache', []);
+        \Bootstrap::$contentToInclude = '';
     }
 
     protected function tearDown(): void
@@ -34,6 +37,8 @@ final class TemplateCompilerTest extends TestCase
         $this->setStaticProperty(TemplateCompiler::class, 'cacheStats', []);
         $this->setStaticProperty(TemplateCompiler::class, 'maxCacheSize', 100);
         $this->setStaticProperty(TemplateCompiler::class, 'componentPropMetadataCache', []);
+        $this->setStaticProperty(TemplateCompiler::class, 'componentImportCache', []);
+        \Bootstrap::$contentToInclude = '';
     }
 
     public function testCreateHtmlFragmentDomPreservesUtf8EntitiesAcrossRepeatedRoundTrips(): void
@@ -234,8 +239,8 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringContainsString('<a href="/">Home</a>', $output);
         self::assertSame(1, substr_count($output, 'data-state="open"'));
         self::assertSame(1, substr_count($output, 'data-on-change-checked="{toggleHome}"'));
-        self::assertSame(1, substr_count($output, ' on-change-checked="{toggleHome}"'));
         self::assertStringNotContainsString('as-child', $output);
+        self::assertStringNotContainsString(' on-change-checked="{toggleHome}"', $output);
     }
 
     public function testCompileRejectsUnknownHtmlFirstComponentTags(): void
@@ -247,6 +252,217 @@ final class TemplateCompilerTest extends TestCase
         $this->expectExceptionMessage("Component 'x-button' not found.");
 
         TemplateCompiler::compile('<div><x-button>Click Me</x-button></div>');
+    }
+
+    public function testSelectComponentMappingUsesDirectImportForAmbiguousHtmlFirstTags(): void
+    {
+        $fixturePath = $this->createComponentImportFixture("<?php\n\nuse Components\\Calendar;\n");
+
+        try {
+            \Bootstrap::$contentToInclude = $fixturePath;
+            $this->setStaticProperty(TemplateCompiler::class, 'classMappings', [
+                'x-calendar' => [
+                    [
+                        'className' => 'Components\\Calendar',
+                        'filePath' => __FILE__,
+                    ],
+                    [
+                        'className' => 'Lib\\PPIcons\\Calendar',
+                        'filePath' => __FILE__,
+                    ],
+                ],
+            ]);
+
+            $method = new \ReflectionMethod(TemplateCompiler::class, 'selectComponentMapping');
+            $method->setAccessible(true);
+            $mapping = $method->invoke(null, 'x-calendar');
+
+            self::assertSame('Components\\Calendar', $mapping['className']);
+        } finally {
+            @unlink($fixturePath);
+        }
+    }
+
+    public function testSelectComponentMappingIgnoresAliasedImportsForCanonicalTags(): void
+    {
+        $fixturePath = $this->createComponentImportFixture("<?php\n\nuse Components\\Calendar as HomeCalendar;\n");
+
+        try {
+            \Bootstrap::$contentToInclude = $fixturePath;
+            $this->setStaticProperty(TemplateCompiler::class, 'classMappings', [
+                'x-calendar' => [
+                    [
+                        'className' => 'Components\\Calendar',
+                        'filePath' => __FILE__,
+                    ],
+                    [
+                        'className' => 'Lib\\PPIcons\\Calendar',
+                        'filePath' => __FILE__,
+                    ],
+                ],
+            ]);
+
+            $method = new \ReflectionMethod(TemplateCompiler::class, 'selectComponentMapping');
+            $method->setAccessible(true);
+
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Component x-calendar is ambiguous');
+
+            $method->invoke(null, 'x-calendar');
+        } finally {
+            @unlink($fixturePath);
+        }
+    }
+
+    public function testSelectComponentMappingRejectsAmbiguousHtmlFirstTagsWithoutExplicitImport(): void
+    {
+        $fixturePath = $this->createComponentImportFixture("<?php\n\n<div></div>\n");
+
+        try {
+            \Bootstrap::$contentToInclude = $fixturePath;
+            $this->setStaticProperty(TemplateCompiler::class, 'classMappings', [
+                'x-calendar' => [
+                    [
+                        'className' => 'Components\\Calendar',
+                        'filePath' => __FILE__,
+                    ],
+                    [
+                        'className' => 'Lib\\PPIcons\\Calendar',
+                        'filePath' => __FILE__,
+                    ],
+                ],
+            ]);
+
+            $method = new \ReflectionMethod(TemplateCompiler::class, 'selectComponentMapping');
+            $method->setAccessible(true);
+
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Component x-calendar is ambiguous');
+
+            $method->invoke(null, 'x-calendar');
+        } finally {
+            @unlink($fixturePath);
+        }
+    }
+
+    public function testCompileResolvesAliasedHtmlFirstComponentTagsFromUseImports(): void
+    {
+        $fixturePath = $this->createComponentImportFixture("<?php\n\nuse PP\\Tests\\Unit\\HtmlFirstButtonFixture as MyButton;\n");
+
+        try {
+            \Bootstrap::$contentToInclude = $fixturePath;
+            PrismaPHPSettings::$classLogFiles = [
+                'x-button' => [[
+                    'className' => HtmlFirstButtonFixture::class,
+                    'filePath' => __FILE__,
+                ]],
+            ];
+            $this->setStaticProperty(TemplateCompiler::class, 'classMappings', []);
+
+            $output = TemplateCompiler::compile('<div><x-my-button>Click Me</x-my-button></div>');
+
+            self::assertStringContainsString('<button', $output);
+            self::assertStringContainsString('Click Me', $output);
+            self::assertStringNotContainsString('<x-my-button', $output);
+        } finally {
+            @unlink($fixturePath);
+        }
+    }
+
+    public function testSelectComponentMappingPrefersAliasedTargetWhenImportsConflict(): void
+    {
+        $fixturePath = $this->createComponentImportFixture(
+            "<?php\n\nuse PP\\Tests\\Unit\\HtmlFirstAsChildButtonFixture;\nuse PP\\Tests\\Unit\\HtmlFirstButtonFixture as MyButton;\n"
+        );
+
+        try {
+            \Bootstrap::$contentToInclude = $fixturePath;
+            $this->setStaticProperty(TemplateCompiler::class, 'classMappings', [
+                'x-button' => [
+                    [
+                        'className' => HtmlFirstAsChildButtonFixture::class,
+                        'filePath' => __FILE__,
+                    ],
+                    [
+                        'className' => HtmlFirstButtonFixture::class,
+                        'filePath' => __FILE__,
+                    ],
+                ],
+            ]);
+
+            $method = new \ReflectionMethod(TemplateCompiler::class, 'selectComponentMapping');
+            $method->setAccessible(true);
+            $mapping = $method->invoke(null, 'x-my-button');
+
+            self::assertSame(HtmlFirstButtonFixture::class, $mapping['className']);
+        } finally {
+            @unlink($fixturePath);
+        }
+    }
+
+    public function testSelectComponentMappingPrefersDirectImportForCanonicalTagWhenAliasConflicts(): void
+    {
+        $fixturePath = $this->createComponentImportFixture(
+            "<?php\n\nuse PP\\Tests\\Unit\\HtmlFirstAsChildButtonFixture as MyButton;\nuse PP\\Tests\\Unit\\HtmlFirstButtonFixture;\n"
+        );
+
+        try {
+            \Bootstrap::$contentToInclude = $fixturePath;
+            $this->setStaticProperty(TemplateCompiler::class, 'classMappings', [
+                'x-button' => [
+                    [
+                        'className' => HtmlFirstAsChildButtonFixture::class,
+                        'filePath' => __FILE__,
+                    ],
+                    [
+                        'className' => HtmlFirstButtonFixture::class,
+                        'filePath' => __FILE__,
+                    ],
+                ],
+            ]);
+
+            $method = new \ReflectionMethod(TemplateCompiler::class, 'selectComponentMapping');
+            $method->setAccessible(true);
+            $mapping = $method->invoke(null, 'x-button');
+
+            self::assertSame(HtmlFirstButtonFixture::class, $mapping['className']);
+        } finally {
+            @unlink($fixturePath);
+        }
+    }
+
+    public function testSelectComponentMappingResolvesGroupedUseImportsForCanonicalAndAliasTags(): void
+    {
+        $fixturePath = $this->createComponentImportFixture(
+            "<?php\n\nuse PP\\Tests\\Unit\\{HtmlFirstButtonFixture, HtmlFirstAsChildButtonFixture as MyButton};\n"
+        );
+
+        try {
+            \Bootstrap::$contentToInclude = $fixturePath;
+            $this->setStaticProperty(TemplateCompiler::class, 'classMappings', [
+                'x-button' => [
+                    [
+                        'className' => HtmlFirstAsChildButtonFixture::class,
+                        'filePath' => __FILE__,
+                    ],
+                    [
+                        'className' => HtmlFirstButtonFixture::class,
+                        'filePath' => __FILE__,
+                    ],
+                ],
+            ]);
+
+            $method = new \ReflectionMethod(TemplateCompiler::class, 'selectComponentMapping');
+            $method->setAccessible(true);
+
+            $canonicalMapping = $method->invoke(null, 'x-button');
+            $aliasedMapping = $method->invoke(null, 'x-my-button');
+
+            self::assertSame(HtmlFirstButtonFixture::class, $canonicalMapping['className']);
+            self::assertSame(HtmlFirstAsChildButtonFixture::class, $aliasedMapping['className']);
+        } finally {
+            @unlink($fixturePath);
+        }
     }
 
     public function testCompileKeepsPulsePointScriptsRawWithoutCdataWrapper(): void
@@ -318,6 +534,19 @@ final class TemplateCompilerTest extends TestCase
         $reflection = new \ReflectionClass($className);
         $property = $reflection->getProperty($propertyName);
         $property->setValue($value);
+    }
+
+    private function createComponentImportFixture(string $source): string
+    {
+        $fixturePath = tempnam(sys_get_temp_dir(), 'template-compiler-import-');
+
+        if ($fixturePath === false) {
+            $this->fail('Failed to create temporary component fixture.');
+        }
+
+        file_put_contents($fixturePath, $source);
+
+        return $fixturePath;
     }
 }
 
