@@ -99,7 +99,37 @@ final class PHPXTest extends TestCase
         self::assertStringNotContainsString('as-child', $attributes);
         self::assertStringNotContainsString('data-state', $attributes);
         self::assertStringNotContainsString('on-change-checked', $attributes);
-        self::assertSame(['aria-label' => 'Home'], $serializableProps);
+        self::assertSame([
+            'on-change-checked' => '{toggleHome}',
+            'aria-label' => 'Home',
+        ], $serializableProps);
+    }
+
+    public function testConstructorPreservesMappedEventAliasesForRootSerialization(): void
+    {
+        $component = new PHPXEventAliasFixture([
+            'onclick' => '{save}',
+            'on-open-change' => '{toggleOpen}',
+            'aria-label' => 'Trigger',
+        ]);
+
+        $attributes = $component->attributesForTest();
+        $serializableProps = $component->filterIncomingPropsForRootSerialization([
+            'onclick' => '{save}',
+            'on-open-change' => '{toggleOpen}',
+            'aria-label' => 'Trigger',
+        ]);
+
+        self::assertSame('{save}', $component->onClick);
+        self::assertSame('{toggleOpen}', $component->onOpenChange);
+        self::assertStringContainsString("aria-label='Trigger'", $attributes);
+        self::assertStringNotContainsString('onclick', $attributes);
+        self::assertStringNotContainsString('on-open-change', $attributes);
+        self::assertSame([
+            'onclick' => '{save}',
+            'on-open-change' => '{toggleOpen}',
+            'aria-label' => 'Trigger',
+        ], $serializableProps);
     }
 
     private function getStaticProperty(string $className, string $propertyName): mixed
@@ -147,6 +177,17 @@ final class PHPXCustomAliasFixture extends PHPX
     public ?bool $asChild = false;
     public ?string $dataState = null;
     public ?string $onChangeChecked = null;
+
+    public function attributesForTest(): string
+    {
+        return $this->getAttributes();
+    }
+}
+
+final class PHPXEventAliasFixture extends PHPX
+{
+    public ?string $onClick = null;
+    public ?string $onOpenChange = null;
 
     public function attributesForTest(): string
     {

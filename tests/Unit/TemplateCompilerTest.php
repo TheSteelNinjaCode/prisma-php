@@ -243,6 +243,29 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringNotContainsString(' on-change-checked="{toggleHome}"', $output);
     }
 
+    public function testCompilePreservesMappedEventAliasesWhenComponentDoesNotRenderThem(): void
+    {
+        PrismaPHPSettings::$classLogFiles = [
+            'x-button' => [[
+                'className' => HtmlFirstEventAliasFixture::class,
+                'filePath' => __FILE__,
+            ]],
+        ];
+        $this->setStaticProperty(TemplateCompiler::class, 'classMappings', []);
+
+        $output = TemplateCompiler::compile(
+            '<div><x-button onclick="{save}" on-open-change="{toggleOpen}">Save</x-button></div>'
+        );
+
+        self::assertStringContainsString('<button', $output);
+        self::assertStringContainsString('onclick="{save}"', $output);
+        self::assertStringContainsString('on-open-change="{toggleOpen}"', $output);
+        self::assertStringContainsString('<template pp-owner="app">', $output);
+        self::assertStringContainsString('Save', $output);
+        self::assertSame(1, substr_count($output, 'onclick="{save}"'));
+        self::assertSame(1, substr_count($output, 'on-open-change="{toggleOpen}"'));
+    }
+
     public function testCompileRejectsUnknownHtmlFirstComponentTags(): void
     {
         PrismaPHPSettings::$classLogFiles = [];
@@ -601,6 +624,18 @@ final class HtmlFirstCustomAliasFixture extends \PP\PHPX\PHPX
                 . '</section>';
         }
 
+        return '<button>' . ($this->children ?? '') . '</button>';
+    }
+}
+
+final class HtmlFirstEventAliasFixture extends \PP\PHPX\PHPX
+{
+    public ?string $onClick = null;
+    public ?string $onOpenChange = null;
+    public mixed $children = null;
+
+    public function render(): string
+    {
         return '<button>' . ($this->children ?? '') . '</button>';
     }
 }

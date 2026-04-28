@@ -218,8 +218,7 @@ class PHPX implements IPHPX
         string $originalKey,
         string $normalizedKey
     ): bool {
-        return str_contains($originalKey, '-')
-            && str_starts_with(strtolower($originalKey), 'on-')
+        return str_starts_with(strtolower($originalKey), 'on')
             && str_starts_with(strtolower($normalizedKey), 'on');
     }
 

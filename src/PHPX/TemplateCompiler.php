@@ -799,10 +799,7 @@ class TemplateCompiler
                     $eventName = $eventInfo['rawName'];
                     $kebabEventName = $eventInfo['kebabName'];
 
-                    if (
-                        isset($existingAttributes[$eventName]) ||
-                        isset($existingAttributes[$kebabEventName])
-                    ) {
+                    if (self::hasExistingEventAttribute($existingAttributes, $eventName, $kebabEventName)) {
                         continue;
                     }
 
@@ -917,7 +914,7 @@ class TemplateCompiler
             $eventName = $eventInfo['rawName'];
             $kebabEventName = $eventInfo['kebabName'];
 
-            if (isset($existingAttributes[$eventName]) || isset($existingAttributes[$kebabEventName])) {
+            if (self::hasExistingEventAttribute($existingAttributes, $eventName, $kebabEventName)) {
                 continue;
             }
 
@@ -985,10 +982,7 @@ class TemplateCompiler
             $eventName = $eventInfo['rawName'];
             $kebabEventName = $eventInfo['kebabName'];
 
-            if (
-                isset($existingAttributes[$eventName]) ||
-                isset($existingAttributes[$kebabEventName])
-            ) {
+            if (self::hasExistingEventAttribute($existingAttributes, $eventName, $kebabEventName)) {
                 continue;
             }
 
@@ -1377,13 +1371,15 @@ class TemplateCompiler
                     'value' => $value,
                     'containsMustache' => $containsMustache,
                 ];
-                $relevantAttributes[$metadata['rawName']] = true;
-                $relevantAttributes[$metadata['kebabName']] = true;
+                foreach (self::getEquivalentEventAttributeNames($metadata['rawName'], $metadata['kebabName']) as $attributeName) {
+                    $relevantAttributes[$attributeName] = true;
+                }
 
                 if ($buildScopedEventAttributes) {
                     $handlerValue = (string) $value;
-                    $scopedEventAttributes[$metadata['rawName']][$handlerValue] = true;
-                    $scopedEventAttributes[$metadata['kebabName']][$handlerValue] = true;
+                    foreach (self::getEquivalentEventAttributeNames($metadata['rawName'], $metadata['kebabName']) as $attributeName) {
+                        $scopedEventAttributes[$attributeName][$handlerValue] = true;
+                    }
                 }
 
                 continue;
@@ -1408,6 +1404,31 @@ class TemplateCompiler
             'relevantAttributes' => $relevantAttributes,
             'scopedEventAttributes' => $scopedEventAttributes,
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function getEquivalentEventAttributeNames(string $rawName, string $kebabName): array
+    {
+        return array_values(array_unique([$rawName, $kebabName, 'data-' . $kebabName]));
+    }
+
+    /**
+     * @param array<string, true> $existingAttributes
+     */
+    private static function hasExistingEventAttribute(
+        array $existingAttributes,
+        string $rawName,
+        string $kebabName
+    ): bool {
+        foreach (self::getEquivalentEventAttributeNames($rawName, $kebabName) as $attributeName) {
+            if (isset($existingAttributes[$attributeName])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
