@@ -328,8 +328,24 @@ class PHPX implements IPHPX
 
         $all = array_merge($classes);
 
+        if ($tailwindEnabled) {
+            $result = TwMerge::merge(...$all);
+
+            if (count(self::$mergedClassCache) >= self::MERGED_CLASS_CACHE_LIMIT) {
+                self::$mergedClassCache = [];
+            }
+
+            self::$mergedClassCache[$cacheKey] = $result;
+
+            return $result;
+        }
+
         $expr = [];
         foreach ($all as &$chunk) {
+            if (!is_string($chunk)) {
+                continue;
+            }
+
             $chunk = preg_replace_callback(
                 '/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}/',
                 function ($m) use (&$expr) {
@@ -342,9 +358,7 @@ class PHPX implements IPHPX
         }
         unset($chunk);
 
-        $merged = $tailwindEnabled
-            ? TwMerge::merge(...$all)
-            : $this->mergeClasses(...$all);
+        $merged = $this->mergeClasses(...$all);
 
         $result = str_replace(array_keys($expr), array_values($expr), $merged);
 

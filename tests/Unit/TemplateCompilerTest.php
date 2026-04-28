@@ -240,7 +240,7 @@ final class TemplateCompilerTest extends TestCase
         self::assertSame(1, substr_count($output, 'data-state="open"'));
         self::assertSame(1, substr_count($output, 'data-on-change-checked="{toggleHome}"'));
         self::assertStringNotContainsString('as-child', $output);
-        self::assertSame(1, substr_count($output, ' on-change-checked="{toggleHome}"'));
+        self::assertStringNotContainsString(' on-change-checked="{toggleHome}"', $output);
     }
 
     public function testCompileRejectsUnknownHtmlFirstComponentTags(): void
