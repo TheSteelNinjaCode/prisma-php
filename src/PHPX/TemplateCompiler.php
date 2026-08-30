@@ -232,6 +232,296 @@ class TemplateCompiler
         return $htmlContent;
     }
 
+    /**
+     * Wraps every outermost `[pp-component]` root inside `<body>` in an inert
+     * `<template pp-component="...">` element.
+     *
+     * The browser never executes scripts, fetches `src`/`href` URLs, or
+     * value-coerces form controls inside a `<template>`, so component scripts
+     * no longer run before the PulsePoint runtime module loads and raw `{...}`
+     * placeholders no longer trigger console errors or bogus requests before
+     * hydration. The runtime's `mount()` bootstrap materializes
+     * `template[pp-component]` back into live DOM (neutralizing component
+     * scripts first), so post-hydration behavior is unchanged.
+     *
+     * Only outermost boundaries are wrapped; nested boundaries ride along
+     * inside the inert content and become live when the outer template is
+     * materialized.
+     */
+    public static function deferComponentRoots(string $htmlContent): string
+    {
+        if (!str_contains($htmlContent, self::COMPONENT_ATTRIBUTE)) {
+            return $htmlContent;
+        }
+
+        $bodyOpenPos = stripos($htmlContent, '<body');
+        if ($bodyOpenPos === false) {
+            return $htmlContent;
+        }
+
+        $bodyOpenEnd = self::findHtmlTagEnd($htmlContent, $bodyOpenPos);
+        if ($bodyOpenEnd === null) {
+            return $htmlContent;
+        }
+
+        $bodyClosePos = strripos($htmlContent, '</body');
+        $regionEnd = ($bodyClosePos !== false && $bodyClosePos > $bodyOpenEnd)
+            ? $bodyClosePos
+            : strlen($htmlContent);
+
+        $output = '';
+        $emitFrom = 0;
+        $cursor = $bodyOpenEnd + 1;
+
+        while ($cursor < $regionEnd) {
+            $tagStart = strpos($htmlContent, '<', $cursor);
+            if ($tagStart === false || $tagStart >= $regionEnd) {
+                break;
+            }
+
+            if (substr($htmlContent, $tagStart, 4) === '<!--') {
+                $commentEnd = strpos($htmlContent, '-->', $tagStart + 4);
+                if ($commentEnd === false) {
+                    break;
+                }
+
+                $cursor = $commentEnd + 3;
+                continue;
+            }
+
+            if (substr($htmlContent, $tagStart, 9) === '<![CDATA[') {
+                $cdataEnd = strpos($htmlContent, ']]>', $tagStart + 9);
+                if ($cdataEnd === false) {
+                    break;
+                }
+
+                $cursor = $cdataEnd + 3;
+                continue;
+            }
+
+            $tagEnd = self::findHtmlTagEnd($htmlContent, $tagStart);
+            if ($tagEnd === null) {
+                break;
+            }
+
+            $tagMarkup = substr($htmlContent, $tagStart, $tagEnd - $tagStart + 1);
+
+            if (preg_match('/\A<([A-Za-z][\w:.-]*)\b/', $tagMarkup, $matches) !== 1) {
+                $cursor = $tagEnd + 1;
+                continue;
+            }
+
+            $tagName = strtolower($matches[1]);
+            $selfClosing = self::isSelfClosingOpeningTag($tagMarkup)
+                || isset(self::SELF_CLOSING_TAGS[$tagName]);
+            $hasBoundaryAttribute = self::openingTagHasAttribute($tagMarkup, self::COMPONENT_ATTRIBUTE);
+
+            if (($tagName === 'script' || $tagName === 'style') && !$selfClosing) {
+                $closingTagPos = stripos($htmlContent, '</' . $tagName, $tagEnd + 1);
+                if ($closingTagPos === false) {
+                    break;
+                }
+
+                $closingTagEnd = self::findHtmlTagEnd($htmlContent, $closingTagPos);
+                if ($closingTagEnd === null) {
+                    break;
+                }
+
+                if ($hasBoundaryAttribute) {
+                    $wrapped = self::wrapDeferredComponentRoot($htmlContent, $tagStart, $closingTagEnd, $tagMarkup);
+
+                    if ($wrapped !== null) {
+                        $output .= substr($htmlContent, $emitFrom, $tagStart - $emitFrom) . $wrapped;
+                        $emitFrom = $closingTagEnd + 1;
+                    }
+                }
+
+                $cursor = $closingTagEnd + 1;
+                continue;
+            }
+
+            if ($tagName === 'template') {
+                if ($hasBoundaryAttribute && !$selfClosing) {
+                    $elementEnd = self::findElementEndPosition($htmlContent, $tagName, $tagEnd + 1, $regionEnd);
+                    if ($elementEnd === null) {
+                        break;
+                    }
+
+                    $cursor = $elementEnd + 1;
+                    continue;
+                }
+
+                $cursor = $tagEnd + 1;
+                continue;
+            }
+
+            if (!$hasBoundaryAttribute) {
+                $cursor = $tagEnd + 1;
+                continue;
+            }
+
+            $elementEnd = $selfClosing
+                ? $tagEnd
+                : self::findElementEndPosition($htmlContent, $tagName, $tagEnd + 1, $regionEnd);
+
+            if ($elementEnd === null) {
+                return $htmlContent;
+            }
+
+            $wrapped = self::wrapDeferredComponentRoot($htmlContent, $tagStart, $elementEnd, $tagMarkup);
+
+            if ($wrapped !== null) {
+                $output .= substr($htmlContent, $emitFrom, $tagStart - $emitFrom) . $wrapped;
+                $emitFrom = $elementEnd + 1;
+            }
+
+            $cursor = $elementEnd + 1;
+        }
+
+        if ($emitFrom === 0) {
+            return $htmlContent;
+        }
+
+        return $output . substr($htmlContent, $emitFrom);
+    }
+
+    private static function findElementEndPosition(
+        string $html,
+        string $tagName,
+        int $searchFrom,
+        int $limit
+    ): ?int {
+        $depth = 1;
+        $cursor = $searchFrom;
+
+        while (true) {
+            $nextTagPos = strpos($html, '<', $cursor);
+            if ($nextTagPos === false || $nextTagPos >= $limit) {
+                return null;
+            }
+
+            if (substr($html, $nextTagPos, 4) === '<!--') {
+                $commentEnd = strpos($html, '-->', $nextTagPos + 4);
+                if ($commentEnd === false) {
+                    return null;
+                }
+
+                $cursor = $commentEnd + 3;
+                continue;
+            }
+
+            if (substr($html, $nextTagPos, 9) === '<![CDATA[') {
+                $cdataEnd = strpos($html, ']]>', $nextTagPos + 9);
+                if ($cdataEnd === false) {
+                    return null;
+                }
+
+                $cursor = $cdataEnd + 3;
+                continue;
+            }
+
+            $tagEnd = self::findHtmlTagEnd($html, $nextTagPos);
+            if ($tagEnd === null) {
+                return null;
+            }
+
+            $tagMarkup = substr($html, $nextTagPos, $tagEnd - $nextTagPos + 1);
+
+            if (preg_match('/\A<\/([A-Za-z][\w:.-]*)/', $tagMarkup, $closeMatch) === 1) {
+                if (strtolower($closeMatch[1]) === $tagName) {
+                    $depth--;
+
+                    if ($depth === 0) {
+                        return $tagEnd;
+                    }
+                }
+
+                $cursor = $tagEnd + 1;
+                continue;
+            }
+
+            if (preg_match('/\A<([A-Za-z][\w:.-]*)\b/', $tagMarkup, $openMatch) === 1) {
+                $currentTagName = strtolower($openMatch[1]);
+                $currentSelfClosing = self::isSelfClosingOpeningTag($tagMarkup)
+                    || isset(self::SELF_CLOSING_TAGS[$currentTagName]);
+
+                if (($currentTagName === 'script' || $currentTagName === 'style') && !$currentSelfClosing) {
+                    $closingTagPos = stripos($html, '</' . $currentTagName, $tagEnd + 1);
+                    if ($closingTagPos === false) {
+                        return null;
+                    }
+
+                    $closingTagEnd = self::findHtmlTagEnd($html, $closingTagPos);
+                    if ($closingTagEnd === null) {
+                        return null;
+                    }
+
+                    $cursor = $closingTagEnd + 1;
+                    continue;
+                }
+
+                if ($currentTagName === $tagName && !$currentSelfClosing) {
+                    $depth++;
+                }
+            }
+
+            $cursor = $tagEnd + 1;
+        }
+    }
+
+    private static function wrapDeferredComponentRoot(
+        string $html,
+        int $elementStart,
+        int $elementEnd,
+        string $openingTag
+    ): ?string {
+        if (
+            preg_match(
+                '/\b' . self::COMPONENT_ATTRIBUTE . '\s*=\s*(?:"([^"]*)"|\'([^\']*)\')/i',
+                $openingTag,
+                $matches
+            ) !== 1
+        ) {
+            return null;
+        }
+
+        $componentId = $matches[1] !== '' ? $matches[1] : ($matches[2] ?? '');
+        if ($componentId === '') {
+            return null;
+        }
+
+        $elementMarkup = substr($html, $elementStart, $elementEnd - $elementStart + 1);
+
+        return '<template ' . self::COMPONENT_ATTRIBUTE . '="' . $componentId . '">'
+            . self::protectDeferredBraceEntities($elementMarkup)
+            . '</template>';
+    }
+
+    /**
+     * The browser's parse of a deferred `<template>` decodes entities in its
+     * content once, so each escaped brace entity needs one extra encoding
+     * layer (`&#123;` -> `&amp;#123;`) for the runtime to still see the
+     * entity after materialization. Inline script content is raw text and is
+     * left untouched.
+     */
+    private static function protectDeferredBraceEntities(string $markup): string
+    {
+        if (!str_contains($markup, '&')) {
+            return $markup;
+        }
+
+        return self::processMarkupOutsideInlineScripts(
+            $markup,
+            static function (string $part): string {
+                return preg_replace_callback(
+                    '/&(?:amp;)?(?:lbrace|rbrace|#123|#125|#x7b|#x7d);/i',
+                    static fn(array $entityMatch): string => '&amp;' . substr($entityMatch[0], 1),
+                    $part
+                ) ?? $part;
+            }
+        );
+    }
+
     public static function createHtmlFragmentDom(string $templateContent): DOMDocument
     {
         $html = '<' . self::FRAGMENT_WRAPPER_TAG . '>'
