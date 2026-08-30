@@ -52,7 +52,7 @@ final class RequestTest extends TestCase
             'CONTENT_TYPE' => 'application/json',
             'HTTP_HOST' => 'example.test',
             'SCRIPT_NAME' => '/index.php',
-            'HTTP_PP_WIRE_REQUEST' => 'true',
+            'HTTP_X_PULSEPOINT_WIRE' => 'true',
             'HTTP_SEC_FETCH_SITE' => 'same-origin',
             'HTTP_PP_X_FILE_REQUEST' => 'true',
             'HTTP_AUTHORIZATION' => 'Bearer token-123',
@@ -64,6 +64,59 @@ final class RequestTest extends TestCase
         self::assertTrue(Request::$isWire);
         self::assertTrue(Request::$isXFileRequest);
         self::assertSame('token-123', Request::getBearerToken());
+    }
+
+    public function testInitDetectsPulsePointRpcRequest(): void
+    {
+        $_SERVER = [
+            'REQUEST_METHOD' => 'POST',
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_HOST' => 'example.test',
+            'SCRIPT_NAME' => '/index.php',
+            'HTTP_X_PULSEPOINT_WIRE' => 'true',
+            'HTTP_X_PP_RPC' => 'true',
+            'HTTP_X_PP_FUNCTION' => 'saveProfile',
+            'REMOTE_ADDR' => '127.0.0.1',
+        ];
+
+        Request::init();
+
+        self::assertTrue(Request::$isWire);
+        self::assertTrue(Request::$isRpc);
+        self::assertFalse(Request::$isNavigation);
+    }
+
+    public function testInitDetectsPulsePointNavigationRequest(): void
+    {
+        $_SERVER = [
+            'REQUEST_METHOD' => 'GET',
+            'HTTP_HOST' => 'example.test',
+            'SCRIPT_NAME' => '/index.php',
+            'HTTP_X_PULSEPOINT_WIRE' => 'true',
+            'HTTP_X_PP_NAVIGATION' => 'true',
+            'REMOTE_ADDR' => '127.0.0.1',
+        ];
+
+        Request::init();
+
+        self::assertTrue(Request::$isWire);
+        self::assertFalse(Request::$isRpc);
+        self::assertTrue(Request::$isNavigation);
+    }
+
+    public function testRpcDetectionRequiresPostMethod(): void
+    {
+        $_SERVER = [
+            'REQUEST_METHOD' => 'GET',
+            'HTTP_HOST' => 'example.test',
+            'SCRIPT_NAME' => '/index.php',
+            'HTTP_X_PP_RPC' => 'true',
+            'REMOTE_ADDR' => '127.0.0.1',
+        ];
+
+        Request::init();
+
+        self::assertFalse(Request::$isRpc);
     }
 
     public function testGetParamsUsesCachedRawInputForJsonBodies(): void

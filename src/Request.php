@@ -153,9 +153,30 @@ class Request
     /**
      * Indicates whether the request is a wire request.
      *
+     * True for every request issued by the PulsePoint runtime itself
+     * (`X-PulsePoint-Wire: true`): RPC calls and SPA navigations alike.
+     *
      * @var bool
      */
     public static bool $isWire = false;
+
+    /**
+     * Indicates whether the request is a PulsePoint RPC call
+     * (`X-PP-RPC: true` on a POST, from `pp.rpc(...)`), which must be
+     * dispatched to an exposed function instead of rendering the route.
+     *
+     * @var bool
+     */
+    public static bool $isRpc = false;
+
+    /**
+     * Indicates whether the request is a PulsePoint SPA navigation
+     * (`X-PP-Navigation: true`), which expects a full HTML render plus the
+     * `X-PP-Root-Layout` header.
+     *
+     * @var bool
+     */
+    public static bool $isNavigation = false;
 
     /**
      * Indicates whether the request is an X-File request.
@@ -223,6 +244,8 @@ class Request
         self::$isOptions = self::$method === 'OPTIONS';
 
         self::$isWire = self::isWireRequest();
+        self::$isRpc = self::isRpcRequest();
+        self::$isNavigation = self::isNavigationRequest();
         self::$isAjax = self::isAjaxRequest();
         self::$isXFileRequest = self::isXFileRequest();
         self::$params = self::getParams();
@@ -262,10 +285,37 @@ class Request
 
     /**
      * Checks if the request is a wire request.
+     *
+     * The PulsePoint runtime marks every request it issues itself — RPC
+     * calls and SPA navigations alike — with `X-PulsePoint-Wire: true`.
      */
     private static function isWireRequest(): bool
     {
-        $header = $_SERVER['HTTP_PP_WIRE_REQUEST'] ?? self::getHeaderValue('pp-wire-request');
+        $header = $_SERVER['HTTP_X_PULSEPOINT_WIRE'] ?? self::getHeaderValue('x-pulsepoint-wire');
+
+        return $header !== null && strcasecmp($header, 'true') === 0;
+    }
+
+    /**
+     * Checks if the request is a PulsePoint RPC call from `pp.rpc(...)`.
+     */
+    private static function isRpcRequest(): bool
+    {
+        if (self::$method !== 'POST') {
+            return false;
+        }
+
+        $header = $_SERVER['HTTP_X_PP_RPC'] ?? self::getHeaderValue('x-pp-rpc');
+
+        return $header !== null && strcasecmp($header, 'true') === 0;
+    }
+
+    /**
+     * Checks if the request is a PulsePoint SPA navigation fetch.
+     */
+    private static function isNavigationRequest(): bool
+    {
+        $header = $_SERVER['HTTP_X_PP_NAVIGATION'] ?? self::getHeaderValue('x-pp-navigation');
 
         return $header !== null && strcasecmp($header, 'true') === 0;
     }
