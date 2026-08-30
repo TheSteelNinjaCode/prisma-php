@@ -490,10 +490,11 @@ final class TemplateCompilerTest extends TestCase
 
     public function testCompileKeepsPulsePointScriptsRawWithoutCdataWrapper(): void
     {
-        $html = '<div><script type="text/pp">const ready = value > 0 && enabled;</script></div>';
+        $html = '<div><script>const ready = value > 0 && enabled;</script></div>';
         $output = TemplateCompiler::compile($html);
 
-        self::assertStringContainsString('<script type="text/pp">const ready = value > 0 && enabled;</script>', $output);
+        self::assertStringContainsString('<script>const ready = value > 0 && enabled;</script>', $output);
+        self::assertStringNotContainsString('type="text/pp"', $output);
         self::assertStringNotContainsString('<![CDATA[', $output);
         self::assertStringNotContainsString('&amp;&amp;', $output);
         self::assertStringNotContainsString('&gt;', $output);
@@ -539,9 +540,9 @@ final class TemplateCompilerTest extends TestCase
         self::assertStringContainsString('<head data-test="1"><meta charset="UTF-8">', $output);
         self::assertStringContainsString('pp-dynamic-script="81D7D"', $output);
         self::assertStringContainsString('pp-component="', $output);
-        self::assertStringContainsString('type="text/pp"', $output);
+        self::assertStringNotContainsString('type="text/pp"', $output);
         self::assertMatchesRegularExpression('/<script[^>]*pp-dynamic-script="81D7D"[^>]*><\/script><\/head>/i', $output);
-        self::assertMatchesRegularExpression('/type="text\/pp">console\.log\(1\)<\/script><\/body>/i', $output);
+        self::assertMatchesRegularExpression('/<script[^>]*pp-component="[^"]+"[^>]*>console\.log\(1\)<\/script><\/body>/i', $output);
     }
 
     private function getStaticProperty(string $className, string $propertyName): mixed

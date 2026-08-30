@@ -42,7 +42,7 @@ final class MainLayoutTest extends TestCase
 
         self::assertSame(1, substr_count($output, '<script'));
         self::assertStringContainsString('pp-component="', $output);
-        self::assertStringContainsString('type="text/pp"', $output);
+        self::assertStringNotContainsString('type="text/pp"', $output);
         self::assertStringContainsString('data-foo="{bar}"', $output);
     }
 

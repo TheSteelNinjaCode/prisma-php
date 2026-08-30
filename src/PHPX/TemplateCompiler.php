@@ -437,12 +437,7 @@ class TemplateCompiler
 
     private static function processElementNode(DOMElement $node): string
     {
-        $tag = strtolower($node->nodeName);
         $pushed = false;
-
-        if ($tag === 'script' && !$node->hasAttribute('src') && !$node->hasAttribute('type')) {
-            $node->setAttribute('type', 'text/pp');
-        }
 
         if ($node->hasAttribute(self::COMPONENT_ATTRIBUTE)) {
             $componentId = $node->getAttribute(self::COMPONENT_ATTRIBUTE);

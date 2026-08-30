@@ -158,31 +158,18 @@ class MainLayout
 
         $openingTag = substr($script, $tagStart, $openingTagEnd - $tagStart + 1);
         $hasComponentAttribute = self::tagHasAttribute($openingTag, 'pp-component');
-        $hasTypeAttribute = self::tagHasAttribute($openingTag, 'type');
         $openingTagHasMustache = str_contains($openingTag, '{') && str_contains($openingTag, '}');
 
         if (!$openingTagHasMustache) {
-            if ($hasComponentAttribute && $hasTypeAttribute) {
+            if ($hasComponentAttribute) {
                 return $script;
             }
 
-            $attributeMarkup = '';
-
-            if (!$hasComponentAttribute) {
-                $attributeMarkup .= ' pp-component="' . htmlspecialchars(
-                    self::buildFooterComponentId($script, self::resolveFooterCallerClass($callerClass)),
-                    ENT_QUOTES | ENT_SUBSTITUTE,
-                    'UTF-8'
-                ) . '"';
-            }
-
-            if (!$hasTypeAttribute) {
-                $attributeMarkup .= ' type="text/pp"';
-            }
-
-            if ($attributeMarkup === '') {
-                return $script;
-            }
+            $attributeMarkup = ' pp-component="' . htmlspecialchars(
+                self::buildFooterComponentId($script, self::resolveFooterCallerClass($callerClass)),
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            ) . '"';
 
             $insertPosition = self::getOpeningTagInsertPosition($script, $openingTagEnd);
 
@@ -196,10 +183,6 @@ class MainLayout
                 $script,
                 self::resolveFooterCallerClass($callerClass)
             );
-        }
-
-        if (!isset($parsedAttrs['type'])) {
-            $parsedAttrs['type'] = 'text/pp';
         }
 
         $parsedAttrs = self::convertAttributesToKebabCase($parsedAttrs);
