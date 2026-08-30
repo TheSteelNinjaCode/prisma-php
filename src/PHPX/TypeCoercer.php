@@ -50,12 +50,40 @@ class TypeCoercer
             return $value;
         }
 
+        $typeInfo = self::getCachedTypeInfo($type);
+
+        return self::coerceWithCachedTypeInfo($value, $type, $typeInfo, $validationRules);
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public static function getCachedTypeInfo(?ReflectionType $type): ?array
+    {
+        if ($type === null) {
+            return null;
+        }
+
         $typeKey = self::getTypeKey($type);
         if (!isset(self::$typeCache[$typeKey])) {
             self::$typeCache[$typeKey] = self::analyzeType($type);
         }
 
-        $typeInfo = self::$typeCache[$typeKey];
+        return self::$typeCache[$typeKey];
+    }
+
+    /**
+     * @param array<string, mixed>|null $typeInfo
+     */
+    public static function coerceWithCachedTypeInfo(
+        mixed $value,
+        ?ReflectionType $type,
+        ?array $typeInfo,
+        array $validationRules = []
+    ): mixed {
+        if ($type === null || $typeInfo === null) {
+            return $value;
+        }
 
         self::validateBeforeCoercion($value, $typeInfo);
 

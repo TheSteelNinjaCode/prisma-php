@@ -10,6 +10,7 @@ use PP\PrismaPHPSettings;
 use Exception;
 use DateTime;
 use DateTimeImmutable;
+use ReflectionClass;
 use ReflectionProperty;
 use PP\PHPX\TypeCoercer;
 use InvalidArgumentException;
@@ -32,40 +33,193 @@ class PHPX implements IPHPX
     protected array $attributesArray = [];
 
     /**
+     * @var array<string, true>
+     */
+    protected array $attributePropExclusions = [];
+
+    /**
+     * @var array<string, true>
+     */
+    protected array $incomingPropSerializationExclusions = [];
+
+    /**
+     * @var array<class-string, array<string, \ReflectionType|null>>
+     */
+    private static array $publicPropertyTypeCache = [];
+
+    /**
+     * @var array<class-string, array<string, array<string, mixed>|null>>
+     */
+    private static array $publicPropertyTypeInfoCache = [];
+
+    /**
+     * @var array<class-string, array<string, string>>
+     */
+    private static array $publicPropertyLookupCache = [];
+
+    /**
+     * @var array<string, string>
+     */
+    private static array $mergedClassCache = [];
+
+    private const MERGED_CLASS_CACHE_LIMIT = 2048;
+
+    /**
      * Constructor to initialize the component with the given properties.
      *
      * @param array<string, mixed> $props Optional properties to customize the component.
      */
     public function __construct(array $props = [])
     {
+        $className = static::class;
+        $propertyTypes = self::getPublicPropertyTypes($className);
+        $propertyTypeInfos = self::getPublicPropertyTypeInfos($className, $propertyTypes);
+        $propertyLookup = self::getPublicPropertyLookup($className, $propertyTypes);
+        $normalizedProps = [];
+
         foreach ($props as $key => $value) {
-            if (!property_exists($this, $key)) {
+            $originalKey = (string) $key;
+            $normalizedKey = self::resolvePublicPropertyName($originalKey, $propertyTypes, $propertyLookup) ?? $originalKey;
+
+            if (!array_key_exists($normalizedKey, $normalizedProps) || $normalizedKey === $originalKey) {
+                $normalizedProps[$normalizedKey] = $value;
+            }
+
+            if (!array_key_exists($normalizedKey, $propertyTypes)) {
                 continue;
             }
 
-            $reflection = new ReflectionProperty($this, $key);
-
-            if (!$reflection->isPublic()) {
-                continue;
+            if ($originalKey !== $normalizedKey) {
+                $this->attributePropExclusions[$normalizedKey] = true;
+                if (!self::shouldPreserveOriginalPropForRootSerialization($originalKey, $normalizedKey)) {
+                    $this->incomingPropSerializationExclusions[$originalKey] = true;
+                }
             }
+
+            $valueForCoercion = self::normalizeValuelessBooleanProp($value, $propertyTypeInfos[$normalizedKey] ?? null);
 
             try {
-                $coercedValue = TypeCoercer::coerce($value, $reflection->getType());
-                $this->$key = $coercedValue;
+                $coercedValue = TypeCoercer::coerceWithCachedTypeInfo(
+                    $valueForCoercion,
+                    $propertyTypes[$normalizedKey],
+                    $propertyTypeInfos[$normalizedKey] ?? null
+                );
+                $this->$normalizedKey = $coercedValue;
             } catch (InvalidArgumentException $e) {
                 throw new InvalidArgumentException(
                     sprintf(
                         "Invalid value for property '%s' in %s: %s",
-                        $key,
-                        static::class,
+                        $normalizedKey,
+                        $className,
                         $e->getMessage()
                     )
                 );
             }
         }
 
-        $this->props = $props;
-        $this->children = $props['children'] ?? '';
+        $this->props = $normalizedProps;
+        $this->children = $normalizedProps['children'] ?? '';
+    }
+
+    /**
+     * @return array<string, \ReflectionType|null>
+     */
+    private static function getPublicPropertyTypes(string $className): array
+    {
+        if (!isset(self::$publicPropertyTypeCache[$className])) {
+            $reflection = new ReflectionClass($className);
+            $propertyTypes = [];
+
+            foreach ($reflection->getProperties(ReflectionProperty::IS_PUBLIC) as $property) {
+                if ($property->isStatic()) {
+                    continue;
+                }
+
+                $propertyTypes[$property->getName()] = $property->getType();
+            }
+
+            self::$publicPropertyTypeCache[$className] = $propertyTypes;
+        }
+
+        return self::$publicPropertyTypeCache[$className];
+    }
+
+    /**
+     * @param array<string, \ReflectionType|null> $propertyTypes
+     * @return array<string, array<string, mixed>|null>
+     */
+    private static function getPublicPropertyTypeInfos(string $className, array $propertyTypes): array
+    {
+        if (!isset(self::$publicPropertyTypeInfoCache[$className])) {
+            self::$publicPropertyTypeInfoCache[$className] = array_map(
+                static fn($type) => TypeCoercer::getCachedTypeInfo($type),
+                $propertyTypes
+            );
+        }
+
+        return self::$publicPropertyTypeInfoCache[$className];
+    }
+
+    /**
+     * @param array<string, \ReflectionType|null> $propertyTypes
+     * @return array<string, string>
+     */
+    private static function getPublicPropertyLookup(string $className, array $propertyTypes): array
+    {
+        if (!isset(self::$publicPropertyLookupCache[$className])) {
+            $lookup = [];
+
+            foreach (array_keys($propertyTypes) as $propertyName) {
+                $lookup[strtolower($propertyName)] = $propertyName;
+
+                $kebabCase = strtolower((string) preg_replace('/(?<!^)[A-Z]/', '-$0', $propertyName));
+                $lookup[$kebabCase] = $propertyName;
+            }
+
+            self::$publicPropertyLookupCache[$className] = $lookup;
+        }
+
+        return self::$publicPropertyLookupCache[$className];
+    }
+
+    /**
+     * @param array<string, \ReflectionType|null> $propertyTypes
+     * @param array<string, string> $propertyLookup
+     */
+    private static function resolvePublicPropertyName(string $key, array $propertyTypes, array $propertyLookup): ?string
+    {
+        if (array_key_exists($key, $propertyTypes)) {
+            return $key;
+        }
+
+        $normalizedKey = strtolower($key);
+        return $propertyLookup[$normalizedKey] ?? null;
+    }
+
+    /**
+     * @param array<string, mixed>|null $typeInfo
+     */
+    private static function normalizeValuelessBooleanProp(mixed $value, ?array $typeInfo): mixed
+    {
+        if ($value !== '' || $typeInfo === null) {
+            return $value;
+        }
+
+        foreach ($typeInfo['types'] ?? [] as $type) {
+            if (($type['name'] ?? null) === 'bool') {
+                return true;
+            }
+        }
+
+        return $value;
+    }
+
+    private static function shouldPreserveOriginalPropForRootSerialization(
+        string $originalKey,
+        string $normalizedKey
+    ): bool {
+        return str_starts_with(strtolower($originalKey), 'on')
+            && str_starts_with(strtolower($normalizedKey), 'on');
     }
 
     /**
@@ -164,10 +318,33 @@ class PHPX implements IPHPX
      */
     protected function getMergeClasses(string|array ...$classes): string
     {
+        $tailwindEnabled = PrismaPHPSettings::$option->tailwindcss;
+        $cacheKey = self::buildMergedClassCacheKey($classes, $tailwindEnabled);
+
+        if (isset(self::$mergedClassCache[$cacheKey])) {
+            return self::$mergedClassCache[$cacheKey];
+        }
+
         $all = array_merge($classes);
+
+        if ($tailwindEnabled) {
+            $result = TwMerge::merge(...$all);
+
+            if (count(self::$mergedClassCache) >= self::MERGED_CLASS_CACHE_LIMIT) {
+                self::$mergedClassCache = [];
+            }
+
+            self::$mergedClassCache[$cacheKey] = $result;
+
+            return $result;
+        }
 
         $expr = [];
         foreach ($all as &$chunk) {
+            if (!is_string($chunk)) {
+                continue;
+            }
+
             $chunk = preg_replace_callback(
                 '/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}/',
                 function ($m) use (&$expr) {
@@ -180,11 +357,25 @@ class PHPX implements IPHPX
         }
         unset($chunk);
 
-        $merged = PrismaPHPSettings::$option->tailwindcss
-            ? TwMerge::merge(...$all)
-            : $this->mergeClasses(...$all);
+        $merged = $this->mergeClasses(...$all);
 
-        return str_replace(array_keys($expr), array_values($expr), $merged);
+        $result = str_replace(array_keys($expr), array_values($expr), $merged);
+
+        if (count(self::$mergedClassCache) >= self::MERGED_CLASS_CACHE_LIMIT) {
+            self::$mergedClassCache = [];
+        }
+
+        self::$mergedClassCache[$cacheKey] = $result;
+
+        return $result;
+    }
+
+    /**
+     * @param array<int, string|array> $classes
+     */
+    private static function buildMergedClassCacheKey(array $classes, bool $tailwindEnabled): string
+    {
+        return ($tailwindEnabled ? '1:' : '0:') . md5(serialize($classes));
     }
 
     /**
@@ -225,7 +416,11 @@ class PHPX implements IPHPX
      */
     protected function getAttributes(array $params = [], array $exclude = []): string
     {
-        $reserved = ['class', 'children'];
+        $reserved = [
+            'class',
+            'children',
+            ...array_keys($this->attributePropExclusions),
+        ];
         $props = array_diff_key(
             $this->props,
             array_flip(array_merge($reserved, $exclude))
@@ -245,6 +440,19 @@ class PHPX implements IPHPX
 
         $this->attributesArray = $props;
         return implode(' ', $pairs);
+    }
+
+    /**
+     * @param array<string, mixed> $incomingProps
+     * @return array<string, mixed>
+     */
+    public function filterIncomingPropsForRootSerialization(array $incomingProps): array
+    {
+        if ($this->incomingPropSerializationExclusions === []) {
+            return $incomingProps;
+        }
+
+        return array_diff_key($incomingProps, $this->incomingPropSerializationExclusions);
     }
 
     /**

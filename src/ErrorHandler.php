@@ -59,7 +59,7 @@ class ErrorHandler
             }
             $errorContent = Bootstrap::isAjaxOrXFileRequestOrRouteFile()
                 ? "Error: {$severity} - {$message} in {$file} on line {$line}"
-                : "<div class='error'>Error: {$message} in {$file} on line {$line}</div>";
+                : "<div class='error'>Error: " . htmlspecialchars((string) $message, ENT_QUOTES, 'UTF-8') . " in " . htmlspecialchars((string) $file, ENT_QUOTES, 'UTF-8') . " on line {$line}</div>";
 
             if ($severity === E_WARNING || $severity === E_NOTICE) {
                 self::modifyOutputLayoutForError($errorContent);

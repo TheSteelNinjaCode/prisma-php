@@ -16,10 +16,17 @@ class MainLayout
 
     /** @var Set<string>|null */
     private static ?Set $headScripts = null;
-    /** @var Set<string>|null */
-    private static ?Set $footerScripts = null;
+    /** @var list<string>|null */
+    private static ?array $footerScripts = null;
     private static array $customMetadata = [];
     private static array $processedScripts = [];
+    private static int $footerComponentCounter = 0;
+    private static ?string $headScriptsOutputCache = null;
+    private static ?string $footerScriptsOutputCache = null;
+    private static ?array $systemPropsCache = null;
+    private static array $footerScriptHashCache = [];
+    private static array $footerScriptAttributesCache = [];
+    private static array $preparedHeadScriptCache = [];
 
     public static function init(): void
     {
@@ -27,9 +34,11 @@ class MainLayout
             self::$headScripts = new Set();
         }
         if (self::$footerScripts === null) {
-            self::$footerScripts = new Set();
+            self::$footerScripts = [];
         }
         self::$processedScripts = [];
+        self::$headScriptsOutputCache = null;
+        self::$footerScriptsOutputCache = null;
     }
 
     /**
@@ -41,8 +50,10 @@ class MainLayout
     public static function addHeadScript(string ...$scripts): void
     {
         foreach ($scripts as $script) {
-            self::$headScripts->add($script);
+            self::$headScripts->add(self::prepareHeadScript($script));
         }
+
+        self::$headScriptsOutputCache = null;
     }
 
     /**
@@ -53,25 +64,25 @@ class MainLayout
      */
     public static function addFooterScript(string ...$scripts): void
     {
-        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
-        $callerClass = $trace[1]['class'] ?? 'Unknown';
+        $callerClass = null;
 
         foreach ($scripts as $script) {
-            $scriptKey = md5(trim($script));
+            $trimmedScript = trim($script);
+            $scriptKey = $trimmedScript;
 
-            if (strpos($script, '<script') !== false) {
-                $taggedScript = "<!-- class:" . $callerClass . " -->\n" . $script;
-                if (!isset(self::$processedScripts[$scriptKey])) {
-                    self::$footerScripts->add($taggedScript);
-                    self::$processedScripts[$scriptKey] = true;
-                }
-            } else {
-                if (!isset(self::$processedScripts[$scriptKey])) {
-                    self::$footerScripts->add($script);
-                    self::$processedScripts[$scriptKey] = true;
-                }
+            if (isset(self::$processedScripts[$scriptKey])) {
+                continue;
             }
+
+            if (str_starts_with($trimmedScript, '<script')) {
+                $script = self::prepareFooterScript($script, $callerClass);
+            }
+
+            self::$footerScripts[] = $script;
+            self::$processedScripts[$scriptKey] = true;
         }
+
+        self::$footerScriptsOutputCache = null;
     }
 
     /**
@@ -84,19 +95,37 @@ class MainLayout
      */
     public static function outputHeadScripts(): string
     {
-        $headScriptsArray = self::$headScripts->values();
-        $headScriptsWithAttributes = array_map(function ($tag) {
-            if (strpos($tag, '<script') !== false) {
-                return str_replace('<script', '<script pp-dynamic-script="81D7D"', $tag);
-            } elseif (strpos($tag, '<link') !== false) {
-                return str_replace('<link', '<link pp-dynamic-link="81D7D"', $tag);
-            } elseif (strpos($tag, '<style') !== false) {
-                return str_replace('<style', '<style pp-dynamic-style="81D7D"', $tag);
-            }
-            return $tag;
-        }, $headScriptsArray);
+        if (self::$headScriptsOutputCache !== null) {
+            return self::$headScriptsOutputCache;
+        }
 
-        return implode("\n", $headScriptsWithAttributes);
+        self::$headScriptsOutputCache = implode("\n", self::$headScripts->values());
+
+        return self::$headScriptsOutputCache;
+    }
+
+    private static function prepareHeadScript(string $tag): string
+    {
+        if (isset(self::$preparedHeadScriptCache[$tag])) {
+            return self::$preparedHeadScriptCache[$tag];
+        }
+
+        if (strpos($tag, '<script') !== false) {
+            return self::$preparedHeadScriptCache[$tag]
+                = str_replace('<script', '<script pp-dynamic-script="81D7D"', $tag);
+        }
+
+        if (strpos($tag, '<link') !== false) {
+            return self::$preparedHeadScriptCache[$tag]
+                = str_replace('<link', '<link pp-dynamic-link="81D7D"', $tag);
+        }
+
+        if (strpos($tag, '<style') !== false) {
+            return self::$preparedHeadScriptCache[$tag]
+                = str_replace('<style', '<style pp-dynamic-style="81D7D"', $tag);
+        }
+
+        return self::$preparedHeadScriptCache[$tag] = $tag;
     }
 
     /**
@@ -106,49 +135,72 @@ class MainLayout
      */
     public static function outputFooterScripts(): string
     {
-        $processed = [];
-        $componentCounter = 0;
-
-        foreach (self::$footerScripts->values() as $script) {
-            if (preg_match('/<!-- class:([^\s]+) -->/', $script, $matches)) {
-                $rawClassName = $matches[1];
-                $script = preg_replace('/<!-- class:[^\s]+ -->\s*/', '', $script, 1);
-
-                if (str_starts_with(trim($script), '<script')) {
-                    $script = preg_replace_callback(
-                        '/<script\b([^>]*)>/i',
-                        function ($m) use ($rawClassName, &$componentCounter) {
-                            $attrs = $m[1];
-                            $scriptHash = substr(md5($m[0]), 0, 8);
-                            $encodedClass = 's' . base_convert(sprintf('%u', crc32($rawClassName . $componentCounter . $scriptHash)), 10, 36);
-                            $componentCounter++;
-
-                            $parsedAttrs = self::parseScriptAttributes($attrs);
-
-                            if (!isset($parsedAttrs['pp-component'])) {
-                                $parsedAttrs['pp-component'] = $encodedClass;
-                            }
-
-                            if (!isset($parsedAttrs['type'])) {
-                                $parsedAttrs['type'] = 'text/pp';
-                            }
-
-                            $parsedAttrs = self::convertAttributesToKebabCase($parsedAttrs);
-
-                            $newAttrs = self::buildAttributesString($parsedAttrs);
-
-                            return "<script{$newAttrs}>";
-                        },
-                        $script,
-                        1
-                    );
-                }
-            }
-
-            $processed[] = $script;
+        if (self::$footerScriptsOutputCache !== null) {
+            return self::$footerScriptsOutputCache;
         }
 
-        return implode("\n", $processed);
+        self::$footerScriptsOutputCache = implode("\n", self::$footerScripts ?? []);
+
+        return self::$footerScriptsOutputCache;
+    }
+
+    private static function prepareFooterScript(string $script, ?string &$callerClass): string
+    {
+        $tagStart = stripos($script, '<script');
+        if ($tagStart === false) {
+            return $script;
+        }
+
+        $openingTagEnd = self::findOpeningTagEnd($script, $tagStart);
+        if ($openingTagEnd === null) {
+            return $script;
+        }
+
+        $openingTag = substr($script, $tagStart, $openingTagEnd - $tagStart + 1);
+        $hasComponentAttribute = self::tagHasAttribute($openingTag, 'pp-component');
+        $openingTagHasMustache = str_contains($openingTag, '{') && str_contains($openingTag, '}');
+
+        if (!$openingTagHasMustache) {
+            if ($hasComponentAttribute) {
+                return $script;
+            }
+
+            $attributeMarkup = ' pp-component="' . htmlspecialchars(
+                self::buildFooterComponentId($script, self::resolveFooterCallerClass($callerClass)),
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            ) . '"';
+
+            $insertPosition = self::getOpeningTagInsertPosition($script, $openingTagEnd);
+
+            return substr($script, 0, $insertPosition) . $attributeMarkup . substr($script, $insertPosition);
+        }
+
+        $parsedAttrs = self::getCachedScriptAttributes($openingTag);
+
+        if (!isset($parsedAttrs['pp-component'])) {
+            $parsedAttrs['pp-component'] = self::buildFooterComponentId(
+                $script,
+                self::resolveFooterCallerClass($callerClass)
+            );
+        }
+
+        $parsedAttrs = self::convertAttributesToKebabCase($parsedAttrs);
+        $newAttrs = self::buildAttributesString($parsedAttrs);
+
+        return substr($script, 0, $tagStart)
+            . '<script' . $newAttrs . '>'
+            . substr($script, $openingTagEnd + 1);
+    }
+
+    private static function getCachedScriptAttributes(string $openingTag): array
+    {
+        if (!isset(self::$footerScriptAttributesCache[$openingTag])) {
+            $attrString = substr($openingTag, 7, -1);
+            self::$footerScriptAttributesCache[$openingTag] = self::parseScriptAttributes($attrString);
+        }
+
+        return self::$footerScriptAttributesCache[$openingTag];
     }
 
     private static function parseScriptAttributes(string $attrString): array
@@ -189,7 +241,7 @@ class MainLayout
     private static function convertAttributesToKebabCase(array $attributes): array
     {
         $converted = [];
-        $systemProps = TemplateCompiler::getSystemProps();
+        $systemProps = self::$systemPropsCache ??= TemplateCompiler::getSystemProps();
 
         foreach ($attributes as $name => $value) {
             if (isset($systemProps[$name])) {
@@ -235,6 +287,7 @@ class MainLayout
     public static function clearHeadScripts(): void
     {
         self::$headScripts->clear();
+        self::$headScriptsOutputCache = null;
     }
 
     /**
@@ -244,8 +297,94 @@ class MainLayout
      */
     public static function clearFooterScripts(): void
     {
-        self::$footerScripts->clear();
+        self::$footerScripts = [];
         self::$processedScripts = [];
+        self::$footerComponentCounter = 0;
+        self::$footerScriptsOutputCache = null;
+    }
+
+    private static function resolveFooterCallerClass(?string &$callerClass): string
+    {
+        if ($callerClass !== null) {
+            return $callerClass;
+        }
+
+        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 4);
+
+        foreach ($trace as $frame) {
+            $frameClass = $frame['class'] ?? null;
+
+            if ($frameClass !== null && $frameClass !== self::class) {
+                $callerClass = $frameClass;
+                return $callerClass;
+            }
+        }
+
+        $callerClass = 'Unknown';
+
+        return $callerClass;
+    }
+
+    private static function buildFooterComponentId(string $script, string $callerClass): string
+    {
+        $scriptHash = self::$footerScriptHashCache[$script] ??= substr(md5($script), 0, 8);
+        $encodedClass = 's' . base_convert(
+            sprintf('%u', crc32($callerClass . self::$footerComponentCounter . $scriptHash)),
+            10,
+            36
+        );
+        self::$footerComponentCounter++;
+
+        return $encodedClass;
+    }
+
+    private static function tagHasAttribute(string $tagMarkup, string $attributeName): bool
+    {
+        return preg_match('/\b' . preg_quote($attributeName, '/') . '\s*=\s*/i', $tagMarkup) === 1;
+    }
+
+    private static function findOpeningTagEnd(string $markup, int $tagStart): ?int
+    {
+        $length = strlen($markup);
+        $quote = null;
+
+        for ($index = $tagStart + 1; $index < $length; $index++) {
+            $char = $markup[$index];
+
+            if ($quote !== null) {
+                if ($char === $quote) {
+                    $quote = null;
+                }
+
+                continue;
+            }
+
+            if ($char === '"' || $char === "'") {
+                $quote = $char;
+                continue;
+            }
+
+            if ($char === '>') {
+                return $index;
+            }
+        }
+
+        return null;
+    }
+
+    private static function getOpeningTagInsertPosition(string $markup, int $openingTagEnd): int
+    {
+        $insertPosition = $openingTagEnd;
+
+        while ($insertPosition > 0 && ctype_space($markup[$insertPosition - 1])) {
+            $insertPosition--;
+        }
+
+        if ($insertPosition > 0 && $markup[$insertPosition - 1] === '/') {
+            return $insertPosition - 1;
+        }
+
+        return $insertPosition;
     }
 
     /**
